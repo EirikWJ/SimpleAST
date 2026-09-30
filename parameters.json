@@ -1,0 +1,14 @@
+{
+    "_sim.simpleBoatController": "Simworld is 100x100, [17, 0] vs [0, 50] hardest",
+    "steplength": 5,
+    "crash_distance_threshold": 5,
+    "collision_reward": 10,
+    "action_range": [-5, 5],
+    "steerable_pos": [17, 0],
+    "straight_pos": [0,50],
+    
+    "_exploration": "Need more tuneing on expansion. Expansion c at 0.5 and ex at 0.6",
+    "exploration_coefficient": 8,
+    "expansion_coefficient": 0.5,
+    "expansion_exponentioal": 0.6
+}
