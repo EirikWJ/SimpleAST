@@ -66,9 +66,12 @@ class MCTSController:
         e = self.simIntefrace.is_failure_episode()
         # self.currentNode = nextNode
         if terminal:  # If tree is big enough to have an endstate in it we cant rollout.
-            self.endStates.append(state)
+            endState = self.simIntefrace.get_state()
+            self.endStates.append(endState)
             if e:
-                self.crashStates.append(tuple(state))
+                self.crashStates.append(tuple(endState))
+            node.visit_child(nextNode)
+            node.evaluate_child(nextNode, reward)
             return reward
         # self.currentNode = nextNode
         totalReward = reward + self.simulate()
