@@ -15,8 +15,12 @@ from sim.simpleBoatController import SimpleBoatController
 
 class MCTSController:
 
-    def __init__(self) -> None:  # Currently using this one
-        self.simIntefrace = SimInterface()
+    def __init__(self, steerable_start = None, simFactory = None) -> None:  # Currently using this one
+        self.steerable_start = steerable_start
+        if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
+            simFactory = lambda: SimInterface(steerable_start)
+        self.simFactory = simFactory
+        self.simIntefrace = simFactory()
         self.endStates = []
         self.crashStates = []
         self.bestState = None
@@ -138,11 +142,19 @@ class MCTSController:
             childrenCounter.append(len(node.childrenVisits))
         print(f'Average nr of children in tree: {round(totalChildren/len(self.MCT),3)}')
         print(f'{"Best action trace":<25} | {self.bestState}')
-        printSim = SimInterface()
+        printSim = self.simFactory()
         printSim.set_state(self.bestState)
         printSim.plot()
         sn.countplot(x=childrenCounter)
+        plt.title("Children per node in the search tree")
+        plt.xlabel("Number of children")
+        plt.ylabel("Number of nodes")
         plt.show()
         index = range(len(Gs))
-        plt.plot(index, Gs)
+        plt.plot(index, Gs, label = "Total reward of iteration")
+        plt.axhline(self.bestReward, color = "gray", linestyle = "--", label = f'Best reward ({round(self.bestReward, 2)})')
+        plt.title("Reward over iterations")
+        plt.xlabel("Iteration")
+        plt.ylabel("Total reward")
+        plt.legend()
         plt.show()

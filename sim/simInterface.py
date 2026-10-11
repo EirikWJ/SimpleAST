@@ -6,8 +6,8 @@ from sim.simpleBoatController import SimpleBoatController
 
 class SimInterface:
 
-    def __init__(self) -> None:  # Initiates simulation at state zero
-        self.simWorld = SimpleBoatController()
+    def __init__(self, steerable_start = None) -> None:  # Initiates simulation at state zero
+        self.simWorld = SimpleBoatController(steerable_start)
         with open("parameters.json") as f:
             params = json.load(f)
         action_range = params["action_range"]

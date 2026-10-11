@@ -9,6 +9,11 @@ def main():
     MCTS = MCTSController()
     MCTS.loop(4000)
 
+def mainMarast(numberOfLoops = 500):  # Same search, but on MAR-AST's Ship in Transit simulator (parameters_marast.json)
+    from sim.marastInterface import MarAstSimInterface
+    MCTS = MCTSController(simFactory=MarAstSimInterface)
+    MCTS.loop(numberOfLoops)
+
 def randomPath(verbose = True):
     SBC = SimInterface()
     while not SBC.sim_in_endstate:
@@ -18,6 +23,8 @@ def randomPath(verbose = True):
     return SBC.collision_happened
 
 main()
+
+# mainMarast()
 
 # randomPath()
 

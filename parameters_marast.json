@@ -1,0 +1,33 @@
+{
+    "_scenario": "Two ships on reciprocal routes (head-on). Own ship is the system under test with SBMPC COLAV, the adversary is steered by MCTS",
+    "own_route": "collide_own.txt",
+    "adversary_route": "collide_tar.txt",
+    "map": "basemap.gpkg",
+    "time_step": 5,
+    "engine_step_count": 10,
+    "max_sim_time": 6000,
+    "desired_speed": 4.5,
+    "initial_forward_speed": 0.0,
+
+    "_heading_gains": "Boe (master-thesis repo, test_beds/ast_test/setup.py): own kd=66 ki=0.005, passive ship kd=75 ki=0.005. Weakly damped baseline is kd=0 ki=0",
+    "own_heading_gains": {"kp": 1.5, "kd": 66, "ki": 0.005},
+    "adversary_heading_gains": {"kp": 1.5, "kd": 75, "ki": 0.005},
+
+    "_adversary": "Action seed in [0,1] maps to a heading offset in [-max, max] degrees on the adversary's LOS heading, held for action_period seconds",
+    "action_period": 120,
+    "max_heading_offset_deg": 30,
+    "transition_model": "gaussian",
+    "heading_offset_sigma_deg": 15,
+
+    "_reward": "log(p) per action, then collision_reward or -miss_distance/miss_distance_scale at the end",
+    "collision_distance": 50,
+    "collision_reward": 10,
+    "miss_distance_scale": 100,
+    "pass_margin": 1000,
+
+    "_environment": "Wave, wind and current are off so that an action trace always replays to the same outcome",
+    "include_wave": false,
+    "include_wind": false,
+    "include_current": false,
+    "env_seed": 0
+}

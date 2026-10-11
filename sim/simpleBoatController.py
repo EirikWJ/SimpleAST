@@ -21,7 +21,8 @@ import matplotlib.pyplot as plt
 
 class SimpleBoatController:
 
-    def __init__(self) -> None:
+    def __init__(self, steerable_start = None) -> None:  # steerable_start overrides steerable_pos in parameters.json
+        self.steerable_start = steerable_start
         with open("parameters.json") as f:
             params = json.load(f)
         self.steplength = params["steplength"]
@@ -35,6 +36,8 @@ class SimpleBoatController:
             params = json.load(f)
         self.straight_pos = params["straight_pos"]
         self.steerable_pos = params["steerable_pos"]
+        if self.steerable_start is not None:
+            self.steerable_pos = list(self.steerable_start)  # Copy, since positions are mutated in place
         self.steerable_angle = 0
         self.collision_happened = False
         self.sim_in_endstate = False
@@ -73,6 +76,13 @@ class SimpleBoatController:
             plt.plot([steerable_pos[0], straight_pos[0]], [steerable_pos[1], straight_pos[1]], c = "#F0F0F0", zorder=0)
             plt.scatter(steerable_pos[0], steerable_pos[1], c = color, zorder=10)
             plt.scatter(straight_pos[0], straight_pos[1], c = color, zorder=10)
+        for key, _color in colors.items():  # Empty scatters as legend handles
+            plt.scatter([], [], c = _color, label = f'distance > {key}')
+        plt.scatter([], [], c = "blue", label = f'distance <= {cdt} (collision)')
+        plt.legend(title = "Boat distance")
+        plt.title("Boat positions per time step")
+        plt.xlabel("x")
+        plt.ylabel("y")
         plt.ylim(-10, 110)
         plt.xlim(-10, 110)
         plt.show()

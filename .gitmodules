@@ -1,0 +1,3 @@
+[submodule "external/MAR-AST"]
+	path = external/MAR-AST
+	url = https://github.com/AndreasKing-Goks/MAR-AST.git
