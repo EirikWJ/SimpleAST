@@ -36,6 +36,12 @@ class SimInterface:
     def get_state(self) -> List:
         return(self.actionTrace)
     
+    def get_observation(self) -> List:  # What a DRL solver gets to see. Scaled to roughly [-1,1]
+        world = self.simWorld
+        lastSeed = 0.5 if self.lastActionSeed is None else self.lastActionSeed  # p depends on the last seed
+        return [world.steerable_pos[0]/100, world.steerable_pos[1]/100, math.sin(world.steerable_angle),
+                math.cos(world.steerable_angle), world.straight_pos[0]/100, world.straight_pos[1]/100, lastSeed]
+
     def set_state(self, state : Tuple) -> None:
         self.reset_sim()
         state = list(state)

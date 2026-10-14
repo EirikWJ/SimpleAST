@@ -5,6 +5,8 @@
 ### Python ###
 # Project specific
 crashStates.json
+crashStatesSac.json
+results/sacModel.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

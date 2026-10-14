@@ -56,6 +56,16 @@ class MarAstSimInterface:
     def get_state(self) -> List:
         return(self.actionTrace)
 
+    def get_observation(self) -> List:  # What a DRL solver gets to see. Scaled to roughly [-1,1]
+        own, adversary = self.ownShip, self.adversary
+        start = self.positionTrace["adversary"][0]
+        positionScale, speedScale = 10000, 10
+        return [(own.north - adversary.north)/positionScale, (own.east - adversary.east)/positionScale,
+                (adversary.north - start[0])/positionScale, (adversary.east - start[1])/positionScale,
+                math.sin(own.yaw_angle), math.cos(own.yaw_angle), own.forward_speed/speedScale,
+                math.sin(adversary.yaw_angle), math.cos(adversary.yaw_angle), adversary.forward_speed/speedScale,
+                self.closest_distance/positionScale]
+
     def set_state(self, state : Tuple) -> None:
         self.reset_sim()
         state = list(state)
