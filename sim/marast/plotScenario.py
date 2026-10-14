@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from sim.marast.marastPath import REPO_ROOT, MARAST_ROOT
+from sim.marast.scenario import build_moving_object
 
 from utils.get_path import get_ship_route_path, get_map_path
 from utils.prepare_map import get_gdf_from_gpkg
@@ -34,6 +35,13 @@ def plot_scenario(parameterFile = "parameters_marast.json", zoomToRoutes = True)
         ax.scatter(east[-1], north[-1], color=color, marker="*", s=200, zorder=5)
         for i, (n, e) in enumerate(route):  # Waypoint numbers, 0 is the start
             ax.annotate(str(i), (e, n), textcoords="offset points", xytext=labelOffset, color=color, fontsize=9)
+    movingObject = build_moving_object(params)
+    if movingObject is not None:  # Its path only depends on its seed, so it can be drawn without simulating
+        objectSteps = int(params["max_sim_time"]/params["time_step"]) + 1
+        north, east = movingObject.pathNorth[:objectSteps], movingObject.pathEast[:objectSteps]
+        routes.append(np.column_stack([north, east]))
+        ax.plot(east, north, color="tab:green", label=f'{movingObject.name_tag} path (seed {movingObject.seed}, whole max_sim_time)')
+        ax.scatter(east[0], north[0], color="tab:green", marker="o", s=80, zorder=5)
     ax.scatter([], [], color="black", marker="o", label="Start (first waypoint)")
     ax.scatter([], [], color="black", marker="*", s=100, label="Goal (last waypoint)")
     if zoomToRoutes:

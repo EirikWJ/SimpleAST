@@ -25,6 +25,19 @@
     "miss_distance_scale": 100,
     "pass_margin": 1000,
 
+    "_moving_object": "A small object (e.g. a swimmer) on a random path. The path only depends on seed: the same seed always gives the same path, and it does not react to the ships or the solver. It starts within start_radius m of the point route_fraction along the own ship's route. MAR-AST counts it as a collision if the own ship comes within 50 m of it",
+    "moving_object": {
+        "enabled": true,
+        "seed": 42,
+        "name": "Swimmer",
+        "route_fraction": 0.5,
+        "start_radius": 500,
+        "speed": 1.0,
+        "heading_change_sigma_deg": 10,
+        "length": 2,
+        "width": 1
+    },
+
     "_environment": "Wave, wind and current are off so that an action trace always replays to the same outcome",
     "include_wave": false,
     "include_wind": false,

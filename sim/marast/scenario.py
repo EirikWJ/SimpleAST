@@ -4,6 +4,7 @@ import numpy as np
 
 from sim.marast.marastPath import MARAST_ROOT
 from sim.marast.adversaryShip import AdversaryShipModel
+from sim.marast.movingObject import MovingObjectModel
 
 from env_wrappers.multiship_env.env import AssetInfo, ShipAsset, MultiShipEnv
 from simulator.ship_in_transit.sub_systems.ship_model import ShipConfiguration, SimulationConfiguration, ShipModel
@@ -22,9 +23,43 @@ from utils.prepare_map import get_gdf_from_gpkg, get_polygon_from_gdf
 # external/MAR-AST/test_beds/ship_simu_test/test_double_ship_map.py
 
 
+def get_point_along_route(route, fraction):  # (north, east) at a fraction of the route's length
+    legLengths = np.hypot(*np.diff(route, axis=0).T)
+    distance = fraction*legLengths.sum()
+    for (start, end), legLength in zip(zip(route[:-1], route[1:]), legLengths):
+        if distance <= legLength:
+            return start + (end - start)*distance/legLength
+        distance -= legLength
+    return route[-1]
+
+
+def build_moving_object(params):
+    ''' Returns the MovingObjectModel described by params["moving_object"], or None if it is
+        turned off. Its start is drawn around a point part way along the own ship's route.
+    '''
+    objectParams = params.get("moving_object")
+    if objectParams is None or not objectParams["enabled"]:
+        return None
+    ownRoute = np.loadtxt(get_ship_route_path(MARAST_ROOT, params["own_route"]))
+    center_north, center_east = get_point_along_route(ownRoute, objectParams["route_fraction"])
+    return MovingObjectModel(
+        center_north=center_north,
+        center_east=center_east,
+        start_radius=objectParams["start_radius"],
+        speed=objectParams["speed"],
+        heading_change_sigma=np.deg2rad(objectParams["heading_change_sigma_deg"]),
+        time_step=params["time_step"],
+        max_sim_time=params["max_sim_time"],
+        seed=objectParams["seed"],
+        name_tag=objectParams["name"],
+        length=objectParams["length"],
+        width=objectParams["width"])
+
+
 def build_two_ship_env(params):
     ''' Returns (env, assets, map_gdfs). assets[0] is the own ship (system under test,
         SBMPC collision avoidance), assets[1] is the adversary (AdversaryShipModel).
+        assets[2], if params["moving_object"] is enabled, is a MovingObjectModel.
     '''
     time_step = params["time_step"]
     args = SimpleNamespace(time_step=time_step, ship_draw=False, time_since_last_ship_drawing=30)
@@ -163,22 +198,28 @@ def build_two_ship_env(params):
             colav_mode='sbmpc',  # Own ship: SBMPC. Adversary: hook for the injected heading offset
             print_status=False
         )
+        return wrap_asset(ship)
+
+    def wrap_asset(model):
         info = AssetInfo(
-            current_north=ship.north,
-            current_east=ship.east,
-            current_yaw_angle=ship.yaw_angle,
-            forward_speed=ship.forward_speed,
-            sideways_speed=ship.sideways_speed,
-            name_tag=ship.name_tag,
-            ship_length=ship.l_ship,
-            ship_width=ship.w_ship
+            current_north=model.north,
+            current_east=model.east,
+            current_yaw_angle=model.yaw_angle,
+            forward_speed=model.forward_speed,
+            sideways_speed=model.sideways_speed,
+            name_tag=model.name_tag,
+            ship_length=model.l_ship,
+            ship_width=model.w_ship
         )
-        return ShipAsset(ship_model=ship, info=info)
+        return ShipAsset(ship_model=model, info=info)
 
     assets = [
         build_asset(ShipModel, 'Own ship', params["own_route"], params["own_heading_gains"]),
         build_asset(AdversaryShipModel, 'Adversary ship', params["adversary_route"], params["adversary_heading_gains"]),
     ]
+    movingObject = build_moving_object(params)
+    if movingObject is not None:
+        assets.append(wrap_asset(movingObject))
     env = MultiShipEnv(
         assets=assets,
         map=map,
