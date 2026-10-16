@@ -9,7 +9,7 @@ class AstEnv(gym.Env):
 
     def __init__(self, simInterface, episodeCallback = None) -> None:
         self.simInterface = simInterface
-        self.episodeCallback = episodeCallback  # Called with (action trace, G, e) when an episode ends
+        self.episodeCallback = episodeCallback  # Called with (action trace, G, e, start seed) when an episode ends
         self.simInterface.reset_sim()
         observationSize = len(self.simInterface.get_observation())
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(observationSize,), dtype=np.float32)
@@ -27,7 +27,8 @@ class AstEnv(gym.Env):
         self.G += reward
         terminal = self.simInterface.is_terminal()
         if terminal and self.episodeCallback is not None:
-            self.episodeCallback(list(self.simInterface.get_state()), self.G, self.simInterface.is_failure_episode())
+            startSeed = getattr(self.simInterface, "startSeed", None)  # Only set when the start varies, e.g. the free adversary
+            self.episodeCallback(list(self.simInterface.get_state()), self.G, self.simInterface.is_failure_episode(), startSeed)
         return self.get_observation(), reward, terminal, False, {}
 
     def get_observation(self):

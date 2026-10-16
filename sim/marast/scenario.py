@@ -15,6 +15,7 @@ from simulator.ship_in_transit.sub_systems.controllers import ThrottleController
 from simulator.ship_in_transit.sub_systems.wave_model import WaveModelConfiguration
 from simulator.ship_in_transit.sub_systems.current_model import CurrentModelConfiguration
 from simulator.ship_in_transit.sub_systems.wind_model import WindModelConfiguration
+from simulator.ship_in_transit.utils import check_condition
 from utils.get_path import get_ship_route_path, get_map_path
 from utils.prepare_map import get_gdf_from_gpkg, get_polygon_from_gdf
 
@@ -33,33 +34,61 @@ def get_point_along_route(route, fraction):  # (north, east) at a fraction of th
     return route[-1]
 
 
-def build_moving_object(params):
-    ''' Returns the MovingObjectModel described by params["moving_object"], or None if it is
-        turned off. Its start is drawn around a point part way along the own ship's route.
+def sample_free_start(freeParams, startSeed, map_obj, ownRoute):
+    ''' Random (north, east, yaw) for the free adversary, the same for the same startSeed.
+        Uniform within start_radius m of the point start_route_fraction along the own ship's
+        route, inside the map and at least land_clearance m from land. Uniform heading.
     '''
-    objectParams = params.get("moving_object")
-    if objectParams is None or not objectParams["enabled"]:
-        return None
+    rng = np.random.default_rng(startSeed)
+    center_north, center_east = get_point_along_route(ownRoute, freeParams["start_route_fraction"])
+    for _ in range(1000):
+        distance = freeParams["start_radius"]*np.sqrt(rng.uniform())
+        direction = rng.uniform(0, 2*np.pi)
+        north = center_north + distance*np.cos(direction)
+        east = center_east + distance*np.sin(direction)
+        clearance = 2*freeParams["land_clearance"]  # MAR-AST's checks use ship_length/2 as margin
+        if not (check_condition.is_grounding(map_obj, [north, east], clearance)
+                or check_condition.is_pos_outside_horizon(map_obj, [north, east], clearance)):
+            return float(north), float(east), float(rng.uniform(-np.pi, np.pi))
+    raise ValueError(f'No start on open water found for start seed {startSeed}. Lower land_clearance or move the start area')
+
+
+def get_dummy_route(north, east, yaw):  # Two waypoints, the second so far away that it is never reached
+    farAway = 1e6
+    return np.array([[north, east], [north + farAway*np.cos(yaw), east + farAway*np.sin(yaw)]])
+
+
+def build_swimmers(params):
+    ''' Returns the swimmers described by params["swimmers"], as a list of MovingObjectModel
+        (empty if count is 0 or the block is missing). Swimmer i gets seed first_seed + i, so
+        every swimmer has its own path, and the same seeds always give the same paths. Each
+        starts within start_radius m of the point route_fraction along the own ship's route.
+    '''
+    swimmerParams = params.get("swimmers")
+    if swimmerParams is None or swimmerParams["count"] == 0:
+        return []
     ownRoute = np.loadtxt(get_ship_route_path(MARAST_ROOT, params["own_route"]))
-    center_north, center_east = get_point_along_route(ownRoute, objectParams["route_fraction"])
-    return MovingObjectModel(
-        center_north=center_north,
-        center_east=center_east,
-        start_radius=objectParams["start_radius"],
-        speed=objectParams["speed"],
-        heading_change_sigma=np.deg2rad(objectParams["heading_change_sigma_deg"]),
-        time_step=params["time_step"],
-        max_sim_time=params["max_sim_time"],
-        seed=objectParams["seed"],
-        name_tag=objectParams["name"],
-        length=objectParams["length"],
-        width=objectParams["width"])
+    center_north, center_east = get_point_along_route(ownRoute, swimmerParams["route_fraction"])
+    return [MovingObjectModel(
+                center_north=center_north,
+                center_east=center_east,
+                start_radius=swimmerParams["start_radius"],
+                speed=swimmerParams["speed"],
+                heading_change_sigma=np.deg2rad(swimmerParams["heading_change_sigma_deg"]),
+                time_step=params["time_step"],
+                max_sim_time=params["max_sim_time"],
+                seed=swimmerParams["first_seed"] + i,
+                name_tag=f'Swimmer {i + 1}',  # MAR-AST tells assets apart by name, so the names must differ
+                length=swimmerParams["length"],
+                width=swimmerParams["width"])
+            for i in range(swimmerParams["count"])]
 
 
 def build_two_ship_env(params):
     ''' Returns (env, assets, map_gdfs). assets[0] is the own ship (system under test,
         SBMPC collision avoidance), assets[1] is the adversary (AdversaryShipModel).
-        assets[2], if params["moving_object"] is enabled, is a MovingObjectModel.
+        assets[2:] are the swimmers from params["swimmers"] (MovingObjectModel). The own
+        ship's SBMPC avoids them, and MAR-AST's collision check stops a ship that hits one.
     '''
     time_step = params["time_step"]
     args = SimpleNamespace(time_step=time_step, ship_draw=False, time_since_last_ship_drawing=30)
@@ -160,9 +189,8 @@ def build_two_ship_env(params):
         specific_fuel_consumption_coefficients_dg=SpecificFuelConsumptionBaudouin6M26Dot3().fuel_consumption_coefficients()
     )
 
-    def build_asset(shipClass, name_tag, route_filename, heading_gains):
-        route_name = get_ship_route_path(MARAST_ROOT, route_filename)
-        route = np.loadtxt(route_name)  # Columns: north, east
+    def build_asset(shipClass, name_tag, route_name, heading_gains):  # route_name: route file path, or an array of waypoints
+        route = np.loadtxt(route_name) if isinstance(route_name, str) else route_name  # Columns: north, east
         (north_0, east_0), (north_1, east_1) = route[0], route[1]
         simulation_config = SimulationConfiguration(
             initial_north_position_m=north_0,
@@ -213,13 +241,20 @@ def build_two_ship_env(params):
         )
         return ShipAsset(ship_model=model, info=info)
 
+    ownRouteName = get_ship_route_path(MARAST_ROOT, params["own_route"])
+    if params.get("adversary_mode", "route") == "free":  # No route: random start, steered directly by the solver
+        freeParams = params["free_adversary"]
+        start = sample_free_start(freeParams, freeParams["start_seed"], map[0], np.loadtxt(ownRouteName))
+        adversaryRoute = get_dummy_route(*start)
+    else:
+        adversaryRoute = get_ship_route_path(MARAST_ROOT, params["adversary_route"])
     assets = [
-        build_asset(ShipModel, 'Own ship', params["own_route"], params["own_heading_gains"]),
-        build_asset(AdversaryShipModel, 'Adversary ship', params["adversary_route"], params["adversary_heading_gains"]),
+        build_asset(ShipModel, 'Own ship', ownRouteName, params["own_heading_gains"]),
+        build_asset(AdversaryShipModel, 'Adversary ship', adversaryRoute, params["adversary_heading_gains"]),
     ]
-    movingObject = build_moving_object(params)
-    if movingObject is not None:
-        assets.append(wrap_asset(movingObject))
+    if params.get("adversary_mode", "route") == "free":
+        assets[1].ship_model.steer_freely()
+    assets += [wrap_asset(swimmer) for swimmer in build_swimmers(params)]
     env = MultiShipEnv(
         assets=assets,
         map=map,

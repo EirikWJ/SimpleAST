@@ -6,15 +6,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from sim.marast.marastPath import REPO_ROOT
-from sim.marast.scenario import build_two_ship_env
+from sim.marast.scenario import build_two_ship_env, get_point_along_route, sample_free_start
 
 from env_wrappers.multiship_env.env import AssetInfo
+
+SWIMMER_COLORS = ("tab:green", "tab:olive", "tab:cyan", "tab:purple", "tab:brown", "tab:pink")
+
+def _wrap_to_pi(angle):
+    return (angle + math.pi) % (2*math.pi) - math.pi
 
 class MarAstSimInterface:
     ''' Same interface as sim.simInterface.SimInterface, but backed by MAR-AST's Ship in
         Transit simulator. The own ship follows its route with SBMPC collision avoidance.
-        The action seed steers the adversary ship: seed in [0,1] -> heading offset on its
-        LOS heading, held for one action period.
+        The action seed steers the adversary ship, held for one action period:
+        - adversary_mode "route": seed in [0,1] -> heading offset on its LOS heading
+        - adversary_mode "free": no route. It starts at a random position and heading (from a
+          start seed), and seed in [0,1] -> turn of its commanded heading
+        Swimmers (any number) move on seeded random paths. The own ship's SBMPC avoids them.
+        Only own ship vs adversary counts as a collision: a ship that hits a swimmer stops,
+        which ends the episode without one.
     '''
 
     def __init__(self, parameterFile = "parameters_marast.json") -> None:  # Initiates simulation at state zero
@@ -24,7 +34,7 @@ class MarAstSimInterface:
         self.env, self.assets, self.map_gdfs = build_two_ship_env(params)
         self.ownShip = self.assets[0].ship_model
         self.adversary = self.assets[1].ship_model
-        self.movingObject = self.assets[2].ship_model if len(self.assets) > 2 else None  # MovingObjectModel, or None if turned off
+        self.swimmers = [asset.ship_model for asset in self.assets[2:]]  # MovingObjectModel. Hitting one ends the episode, but is not a found collision
         self.stepsPerAction = max(1, round(params["action_period"]/params["time_step"]))
         self.maxOffset = math.radians(params["max_heading_offset_deg"])
         self.offsetSigma = math.radians(params["heading_offset_sigma_deg"])
@@ -34,11 +44,30 @@ class MarAstSimInterface:
         self.miss_distance_scale = params["miss_distance_scale"]
         self.pass_margin = params["pass_margin"]
         self.max_sim_time = params["max_sim_time"]
+        self.freeAdversary = params.get("adversary_mode", "route") == "free"
+        self.startSeed = None  # Start seed of the current episode. Only used by the free adversary
+        self.randomise_start = False
+        if self.freeAdversary:
+            self.freeParams = params["free_adversary"]
+            self.maxTurn = math.radians(self.freeParams["max_turn_deg"])
+            self.turnSigma = math.radians(self.freeParams["turn_sigma_deg"])
+            self.randomise_start = self.freeParams["randomise_start_each_episode"]
+            self.nextStartSeed = self.freeParams["start_seed"]
+            navigate = self.ownShip.auto_pilot.navigate
+            self.ownRoute = np.column_stack([navigate.north, navigate.east])
+            self.anchor = get_point_along_route(self.ownRoute, self.freeParams["start_route_fraction"])  # Center of the start area
+        else:
+            navigate = self.adversary.auto_pilot.navigate
+            self.anchor = (navigate.north[0], navigate.east[0])  # Start of the adversary's route
         self.reset_sim()
 
     def step(self, actionSeed) -> float:  # return reward
         p = self._get_transition_probability(actionSeed)
-        self.adversary.heading_offset = self._get_action_from_seed(actionSeed)
+        if self.freeAdversary:  # The seed turns the adversary, and it holds its new heading
+            autopilot = self.adversary.auto_pilot
+            autopilot.commanded_heading = _wrap_to_pi(autopilot.commanded_heading + self._get_action_from_seed(actionSeed))
+        else:
+            self.adversary.heading_offset = self._get_action_from_seed(actionSeed)
         for _ in range(self.stepsPerAction):
             self.env.step()
             self._record_positions()
@@ -59,30 +88,41 @@ class MarAstSimInterface:
 
     def get_observation(self) -> List:  # What a DRL solver gets to see. Scaled to roughly [-1,1]
         own, adversary = self.ownShip, self.adversary
-        start = self.positionTrace["adversary"][0]
         positionScale, speedScale = 10000, 10
         observation = [(own.north - adversary.north)/positionScale, (own.east - adversary.east)/positionScale,
-                       (adversary.north - start[0])/positionScale, (adversary.east - start[1])/positionScale,
+                       (adversary.north - self.anchor[0])/positionScale, (adversary.east - self.anchor[1])/positionScale,
                        math.sin(own.yaw_angle), math.cos(own.yaw_angle), own.forward_speed/speedScale,
                        math.sin(adversary.yaw_angle), math.cos(adversary.yaw_angle), adversary.forward_speed/speedScale,
                        self.closest_distance/positionScale]
-        if self.movingObject is not None:  # Where the object is relative to the own ship
-            observation += [(own.north - self.movingObject.north)/positionScale, (own.east - self.movingObject.east)/positionScale]
+        for swimmer in self.swimmers:  # Where each swimmer is relative to the adversary, so it can learn to avoid them
+            observation += [(swimmer.north - adversary.north)/positionScale, (swimmer.east - adversary.east)/positionScale]
+        if self.freeAdversary:  # The heading it is turning towards
+            commandedHeading = adversary.auto_pilot.commanded_heading
+            observation += [math.sin(commandedHeading), math.cos(commandedHeading)]
         return observation
 
-    def set_state(self, state : Tuple) -> None:
-        self.reset_sim()
+    def set_state(self, state : Tuple, startSeed = None) -> None:  # Replays from the current start, or from startSeed if given
+        self.reset_sim(self.startSeed if startSeed is None else startSeed)
         state = list(state)
         for actionSeed in state:
             self.step(actionSeed)
 
-    def reset_sim(self) -> None:
+    def reset_sim(self, startSeed = None) -> None:  # startSeed: start of the free adversary. None gives the next one
         self.actionTrace = []
         self.lastActionSeed = None
         self.sim_in_endstate = False
         self.collision_happened = False
         self.terminal_reason = None
         self.env.reset(seed=self.params["env_seed"])
+        if self.freeAdversary:
+            if startSeed is None:  # Same start every episode, or start_seed, start_seed+1, ... if randomised
+                startSeed = self.nextStartSeed
+                if self.randomise_start:
+                    self.nextStartSeed += 1
+            self.startSeed = startSeed
+            north, east, yaw = sample_free_start(self.freeParams, startSeed, self.env.map, self.ownRoute)
+            self.adversary.north, self.adversary.east, self.adversary.yaw_angle = np.float64(north), np.float64(east), np.float64(yaw)
+            self.adversary.auto_pilot.commanded_heading = yaw
         # MAR-AST leaves some state behind between episodes. Clear it, so that an action
         # trace always replays to the same outcome:
         for asset in self.assets:  # env.reset() reuses the info object of the previous episode
@@ -96,10 +136,11 @@ class MarAstSimInterface:
                 ship.sbmpc._params.Chi_ca_last_ = 0.0
                 ship.sbmpc.active = False
         self.adversary.heading_offset = 0.0
-        self.positionTrace = {"own": [], "adversary": [], "object": []}  # (north, east) per sim step
+        self.positionTrace = {"own": [], "adversary": [], "swimmers": [[] for _ in self.swimmers]}  # (north, east) per sim step
         self._record_positions()
         self.closest_distance = self._get_current_distance()
-        self.closest_object_distance = self._get_object_distance()  # Own ship to moving object, not part of the reward
+        self.closest_swimmer_distances = [(math.inf, math.inf) for _ in self.swimmers]  # (to own ship, to adversary). Not part of the reward
+        self._update_swimmer_distances()
 
     def reward(self, # Reward function.
         p,  # Transition probability
@@ -120,26 +161,29 @@ class MarAstSimInterface:
         for name, ship, color in (("Own ship", self.ownShip, "tab:blue"), ("Adversary ship", self.adversary, "tab:red")):
             trace = np.array(self.positionTrace["own" if ship is self.ownShip else "adversary"])
             navigate = ship.auto_pilot.navigate
-            ax.plot(navigate.east, navigate.north, color=color, linestyle=":", linewidth=1, label=f'{name} route')
+            if not (ship is self.adversary and self.freeAdversary):  # The free adversary only has a dummy route
+                ax.plot(navigate.east, navigate.north, color=color, linestyle=":", linewidth=1, label=f'{name} route')
             ax.plot(trace[:, 1], trace[:, 0], color=color, label=f'{name} path')
             ax.scatter(trace[0, 1], trace[0, 0], color=color, marker="o", zorder=5)
             ax.scatter(trace[-1, 1], trace[-1, 0], color=color, marker="x", zorder=5)
-        if self.movingObject is not None:
-            trace = np.array(self.positionTrace["object"])
-            ax.plot(trace[:, 1], trace[:, 0], color="tab:green",
-                    label=f'{self.movingObject.name_tag} path (seed {self.movingObject.seed}, closest {round(self.closest_object_distance)} m)')
-            ax.scatter(trace[0, 1], trace[0, 0], color="tab:green", marker="o", zorder=5)
-            ax.scatter(trace[-1, 1], trace[-1, 0], color="tab:green", marker="x", zorder=5)
+        swimmerTraces = [np.array(trace) for trace in self.positionTrace["swimmers"]]
+        for i, (swimmer, trace, (toOwn, toAdversary)) in enumerate(zip(self.swimmers, swimmerTraces, self.closest_swimmer_distances)):
+            color = SWIMMER_COLORS[i % len(SWIMMER_COLORS)]
+            ax.plot(trace[:, 1], trace[:, 0], color=color,
+                    label=f'{swimmer.name_tag} (seed {swimmer.seed}, closest: own {round(toOwn)} m, adversary {round(toAdversary)} m)')
+            ax.scatter(trace[0, 1], trace[0, 0], color=color, marker="o", zorder=5)
+            ax.scatter(trace[-1, 1], trace[-1, 0], color=color, marker="x", zorder=5)
         own, adversary = np.array(self.positionTrace["own"]), np.array(self.positionTrace["adversary"])
         closest = int(np.argmin(np.hypot(*(own - adversary).T)))
         ax.plot([own[closest, 1], adversary[closest, 1]], [own[closest, 0], adversary[closest, 0]],
                 color="black", marker=".", label=f'Closest distance ({round(self.closest_distance)} m)')
-        allPoints = np.vstack([own, adversary] + ([np.array(self.positionTrace["object"])] if self.movingObject is not None else []))
+        allPoints = np.vstack([own, adversary] + swimmerTraces)
         margin = 1500
         ax.set_xlim(allPoints[:, 1].min() - margin, allPoints[:, 1].max() + margin)
         ax.set_ylim(allPoints[:, 0].min() - margin, allPoints[:, 0].max() + margin)
         ax.set_aspect("equal")
-        ax.set_title(f'Ship paths (o start, x end). Ended by: {self.terminal_reason}')
+        startText = f'Adversary start seed {self.startSeed}. ' if self.freeAdversary else ''
+        ax.set_title(f'Ship paths (o start, x end). {startText}Ended by: {self.terminal_reason}')
         ax.set_xlabel("East [m]")
         ax.set_ylabel("North [m]")
         ax.legend()
@@ -149,14 +193,13 @@ class MarAstSimInterface:
         distance = self._get_current_distance()
         if distance < self.closest_distance:
             self.closest_distance = distance
-        self.closest_object_distance = min(self.closest_object_distance, self._get_object_distance())
-        if self.closest_distance < self.collision_distance:
+        self._update_swimmer_distances()
+        collisionInfo = self.ownShip.stop_info["collision"]  # MAR-AST's own 50 m check, against every other asset
+        ownColliders = collisionInfo[1] if isinstance(collisionInfo, list) else []  # False, or [True, names]
+        if self.closest_distance < self.collision_distance or self.adversary.name_tag in ownColliders:
             self.collision_happened = True
             self.terminal_reason = "collision"
-        elif "collision" in self._stop_reasons(self.ownShip):  # MAR-AST's own 50 m check, against every other asset
-            self.collision_happened = True
-            self.terminal_reason = f'collision with {", ".join(self.ownShip.stop_info["collision"][1])}'
-        elif self.ownShip.stop or self.adversary.stop:  # Grounding, navigation failure, reached endpoint...
+        elif self.ownShip.stop or self.adversary.stop:  # Hit a swimmer, grounding, navigation failure, reached endpoint...
             stopped = self.ownShip if self.ownShip.stop else self.adversary
             self.terminal_reason = f'{stopped.name_tag}: {", ".join(self._stop_reasons(stopped))}'
         elif distance > self.closest_distance + self.pass_margin:
@@ -167,29 +210,36 @@ class MarAstSimInterface:
         return self.sim_in_endstate
 
     def _stop_reasons(self, ship) -> List:  # MAR-AST stores a flag as either bool or [bool, detail]
-        return [key for key, value in ship.stop_info.items() if (value[0] if isinstance(value, list) else value)]
+        reasons = []
+        for key, value in ship.stop_info.items():
+            flag, detail = value if isinstance(value, list) else (value, None)
+            if flag:
+                reasons.append(f'{key} with {", ".join(detail)}' if key == "collision" and detail else key)
+        return reasons
 
     def _record_positions(self) -> None:
         self.positionTrace["own"].append((float(self.ownShip.north), float(self.ownShip.east)))
         self.positionTrace["adversary"].append((float(self.adversary.north), float(self.adversary.east)))
-        if self.movingObject is not None:
-            self.positionTrace["object"].append((self.movingObject.north, self.movingObject.east))
+        for swimmer, trace in zip(self.swimmers, self.positionTrace["swimmers"]):
+            trace.append((swimmer.north, swimmer.east))
 
     def _get_current_distance(self) -> float:
         return math.hypot(self.ownShip.north - self.adversary.north, self.ownShip.east - self.adversary.east)
 
-    def _get_object_distance(self) -> float:
-        if self.movingObject is None:
-            return math.inf
-        return math.hypot(self.ownShip.north - self.movingObject.north, self.ownShip.east - self.movingObject.east)
+    def _update_swimmer_distances(self) -> None:
+        self.closest_swimmer_distances = [
+            (min(toOwn, math.hypot(self.ownShip.north - swimmer.north, self.ownShip.east - swimmer.east)),
+             min(toAdversary, math.hypot(self.adversary.north - swimmer.north, self.adversary.east - swimmer.east)))
+            for swimmer, (toOwn, toAdversary) in zip(self.swimmers, self.closest_swimmer_distances)]
 
     def _get_transition_probability(self, actionSeed):
-        if self.transition_model == "gaussian":  # Following the route (no offset) is the most likely behaviour
-            offset = self._get_action_from_seed(actionSeed)
-            return math.exp(-offset**2/(2*self.offsetSigma**2))
+        if self.transition_model == "gaussian":  # Following the route (no offset), or going straight (no turn), is the most likely behaviour
+            action = self._get_action_from_seed(actionSeed)
+            sigma = self.turnSigma if self.freeAdversary else self.offsetSigma
+            return math.exp(-action**2/(2*sigma**2))
         if self.lastActionSeed is None:  # "smooth": Same as SimInterface, penalizes change between actions
             return 1
         return 1-abs(actionSeed - self.lastActionSeed)
 
-    def _get_action_from_seed(self, actionSeed):  # Heading offset [rad]
-        return (2*actionSeed - 1) * self.maxOffset
+    def _get_action_from_seed(self, actionSeed):  # Heading offset [rad], or turn [rad] for the free adversary
+        return (2*actionSeed - 1) * (self.maxTurn if self.freeAdversary else self.maxOffset)

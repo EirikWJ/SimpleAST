@@ -1,0 +1,57 @@
+{
+    "_scenario": "Own ship on its route with SBMPC COLAV. The adversary has no route: it starts at a random position and heading, and the solver steers it",
+    "own_route": "Stangvik_AST.txt",
+    "adversary_route": "Stangvik_AST_reversed.txt",
+    "map": "Stangvik.gpkg",
+    "time_step": 5,
+    "engine_step_count": 10,
+    "max_sim_time": 6000,
+    "desired_speed": 4.5,
+    "initial_forward_speed": 0.0,
+
+    "_heading_gains": "Boe (master-thesis repo, test_beds/ast_test/setup.py): own kd=66 ki=0.005, passive ship kd=75 ki=0.005. Weakly damped baseline is kd=0 ki=0",
+    "own_heading_gains": {"kp": 1.5, "kd": 66, "ki": 0.005},
+    "adversary_heading_gains": {"kp": 1.5, "kd": 75, "ki": 0.005},
+
+    "_adversary_mode": "\"route\": the adversary follows adversary_route, and the action is a heading offset from it (max_heading_offset_deg, heading_offset_sigma_deg). \"free\": adversary_route is not used, see free_adversary",
+    "adversary_mode": "free",
+    "action_period": 120,
+    "max_heading_offset_deg": 30,
+    "transition_model": "gaussian",
+    "heading_offset_sigma_deg": 15,
+
+    "_free_adversary": "Starts at a random position and heading from the start seed: within start_radius m of the point start_route_fraction along the own ship's route, at least land_clearance m from land. Each action turns its heading by up to max_turn_deg, and p = exp(-turn^2/2 sigma^2), so going straight is the most likely. randomise_start_each_episode: every episode gets the next start seed (start_seed, start_seed+1, ...). Use it for SAC. MCTS needs it false, since its tree assumes the same start every iteration",
+    "free_adversary": {
+        "start_seed": 0,
+        "randomise_start_each_episode": true,
+        "start_route_fraction": 0.5,
+        "start_radius": 2000,
+        "land_clearance": 200,
+        "max_turn_deg": 30,
+        "turn_sigma_deg": 15
+    },
+
+    "_reward": "log(p) per action, then collision_reward or -miss_distance/miss_distance_scale at the end",
+    "collision_distance": 50,
+    "collision_reward": 10,
+    "miss_distance_scale": 100,
+    "pass_margin": 1000,
+
+    "_swimmers": "count swimmers on random paths, swimmer i with seed first_seed + i. A path only depends on its seed: the same seed always gives the same path, and it does not react to the ships or the solver. They start within start_radius m of the point route_fraction along the own ship's route. The own ship's SBMPC avoids them. A ship within 50 m of a swimmer stops (MAR-AST's collision check), which ends the episode without a found collision. count 0 turns them off",
+    "swimmers": {
+        "count": 1,
+        "first_seed": 42,
+        "route_fraction": 0.5,
+        "start_radius": 500,
+        "speed": 1.0,
+        "heading_change_sigma_deg": 10,
+        "length": 2,
+        "width": 1
+    },
+
+    "_environment": "Wave, wind and current are off so that an action trace always replays to the same outcome",
+    "include_wave": false,
+    "include_wind": false,
+    "include_current": false,
+    "env_seed": 0
+}

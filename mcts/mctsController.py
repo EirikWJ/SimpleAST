@@ -21,6 +21,8 @@ class MCTSController:
             simFactory = lambda: SimInterface(steerable_start)
         self.simFactory = simFactory
         self.simIntefrace = simFactory()
+        if getattr(self.simIntefrace, "randomise_start", False):  # The tree assumes that every iteration starts from the same state
+            raise ValueError("MCTS needs the same start every iteration. Set randomise_start_each_episode to false in the parameter file")
         self.endStates = []
         self.crashStates = []
         self.bestState = None

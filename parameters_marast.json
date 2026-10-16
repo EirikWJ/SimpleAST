@@ -25,11 +25,10 @@
     "miss_distance_scale": 100,
     "pass_margin": 1000,
 
-    "_moving_object": "A small object (e.g. a swimmer) on a random path. The path only depends on seed: the same seed always gives the same path, and it does not react to the ships or the solver. It starts within start_radius m of the point route_fraction along the own ship's route. MAR-AST counts it as a collision if the own ship comes within 50 m of it",
-    "moving_object": {
-        "enabled": true,
-        "seed": 42,
-        "name": "Swimmer",
+    "_swimmers": "count swimmers on random paths, swimmer i with seed first_seed + i. A path only depends on its seed: the same seed always gives the same path, and it does not react to the ships or the solver. They start within start_radius m of the point route_fraction along the own ship's route. The own ship's SBMPC avoids them. A ship within 50 m of a swimmer stops (MAR-AST's collision check), which ends the episode without a found collision. count 0 turns them off",
+    "swimmers": {
+        "count": 1,
+        "first_seed": 42,
         "route_fraction": 0.5,
         "start_radius": 500,
         "speed": 1.0,

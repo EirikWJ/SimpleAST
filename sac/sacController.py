@@ -22,11 +22,13 @@ class SACController:
         self.simFactory = simFactory
         self.simInterface = simFactory()
         self.endStates = []
-        self.crashStates = []
+        self.crashStates = []  # Action traces, or (start seed, action trace) when the start varies between episodes
         self.bestState = None
+        self.bestStartSeed = None
         self.bestReward = -math.inf
         self.Gs = []
         self.policyState = None  # Action trace and reward of the trained policy, run without exploration noise
+        self.policyStartSeed = None
         self.policyReward = None
         with open(REPO_ROOT / parameterFile) as f:
             self.params = json.load(f)
@@ -55,11 +57,12 @@ class SACController:
             modelPath.parent.mkdir(parents=True, exist_ok=True)
             self.model.save(modelPath)
         self.policyState, self.policyReward = self.run_policy()
+        self.policyStartSeed = getattr(self.simInterface, "startSeed", None)
         self.stats(self.Gs, runTime)
         return self.bestState, self.bestReward
 
-    def run_policy(self):  # One episode with the trained policy's most likely action in every step
-        self.simInterface.reset_sim()
+    def run_policy(self, startSeed = None):  # One episode with the trained policy's most likely action in every step
+        self._reset(self.simInterface, startSeed)
         G = 0
         terminal = False
         while not terminal:
@@ -68,18 +71,45 @@ class SACController:
             terminal = self.simInterface.is_terminal()
         return list(self.simInterface.get_state()), G
 
-    def _record_episode(self, state, G, e) -> None:
+    def evaluate(self, numberOfStarts = 20, firstStartSeed = 10**6):  # The trained policy on starts it never trained on
+        # Training uses start seeds start_seed, start_seed+1, ..., so seeds from 10**6 are unseen unless training ran that long
+        results = []
+        for startSeed in range(firstStartSeed, firstStartSeed + numberOfStarts):
+            state, G = self.run_policy(startSeed)
+            results.append((startSeed, self.simInterface.is_failure_episode(), G, self.simInterface.closest_distance))
+        collisions = sum(collided for _, collided, _, _ in results)
+        print("-"*35)
+        print(f'{"Evaluation start seeds":<25} | {firstStartSeed} to {firstStartSeed + numberOfStarts - 1}')
+        print(f'{"Collisions":<25} | {collisions} of {numberOfStarts} ({round(100*collisions/numberOfStarts)} %)')
+        print(f'{"Median reward":<25} | {round(float(np.median([G for _, _, G, _ in results])), 2)}')
+        print(f'{"Median closest distance":<25} | {round(float(np.median([d for _, _, _, d in results])))} m')
+        return results
+
+    def _record_episode(self, state, G, e, startSeed = None) -> None:
         i = len(self.Gs)
         if (i%1000 == 0):
             print(i)
         self.endStates.append(state)
         if e:
-            self.crashStates.append(tuple(state))
+            self.crashStates.append(tuple(state) if startSeed is None else (startSeed, tuple(state)))
         if G > self.bestReward:
             self.bestState = state
+            self.bestStartSeed = startSeed
             self.bestReward = G
             print(f'Score {round(G, 2)} found at iteration {i}')
         self.Gs.append(G)
+
+    def _reset(self, sim, startSeed = None) -> None:  # SimInterface has no start seed
+        if startSeed is None:
+            sim.reset_sim()
+        else:
+            sim.reset_sim(startSeed)
+
+    def _replay(self, sim, state, startSeed = None) -> None:
+        if startSeed is None:
+            sim.set_state(state)
+        else:
+            sim.set_state(state, startSeed)
 
     def stats(self, Gs, runTime):
         print("-"*35)
@@ -88,14 +118,18 @@ class SACController:
         print(f'{"Best reward found":<25} | {round(self.bestReward, 2):4}')
         print(f'{"Nr of crash states found":<25} | {len(self.crashStates):}')
         print(f'{"Unique crash states found":<25} | {len(set(self.crashStates))}')
+        if self.bestStartSeed is not None:
+            print(f'{"Best start seed":<25} | {self.bestStartSeed}')
         print(f'{"Best action trace":<25} | {self.bestState}')
         policyCrashed = self.simInterface.is_failure_episode()  # The sim still holds the episode from run_policy
         print(f'{"Trained policy reward":<25} | {round(self.policyReward, 2):4} ({"collision" if policyCrashed else "no collision"})')
+        if self.policyStartSeed is not None:
+            print(f'{"Trained policy start seed":<25} | {self.policyStartSeed}')
         print(f'{"Trained policy trace":<25} | {self.policyState}')
         printSim = self.simFactory()
-        printSim.set_state(self.bestState)
+        self._replay(printSim, self.bestState, self.bestStartSeed)
         printSim.plot()
-        printSim.set_state(self.policyState)
+        self._replay(printSim, self.policyState, self.policyStartSeed)
         printSim.plot()
         index = range(len(Gs))
         window = max(1, len(Gs)//20)
