@@ -3,31 +3,38 @@ import json, sys
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sim.marast.marastPath import REPO_ROOT, MARAST_ROOT
-from sim.marast.scenario import build_swimmers, get_point_along_route, sample_free_start
+from sim.marast.marastPath import REPO_ROOT
+from sim.marast.scenario import build_swimmers, get_map_file, get_start_area_center, has_fixed_start, load_route, sample_free_start
 from sim.marastInterface import SWIMMER_COLORS
 
 from simulator.ship_in_transit.sub_systems.obstacle import PolygonObstacle
-from utils.get_path import get_ship_route_path, get_map_path
 from utils.prepare_map import get_gdf_from_gpkg, get_polygon_from_gdf
 
 # Draws the map and routes from a MAR-AST parameter file, without simulating anything.
 # Run from the repo root:  uv run python -m sim.marast.plotScenario [parameters_marast.json]
 
 def plot_free_starts(ax, params, land_gdf, ownRoute, numberOfStarts):
-    # The start area, and the starts of the first numberOfStarts start seeds with an arrow for the heading
+    # The start area, and the starts of the first numberOfStarts start seeds with an arrow for the heading.
+    # With a fixed start, only that start
     freeParams = params["free_adversary"]
     map_obj = PolygonObstacle(get_polygon_from_gdf(land_gdf))
-    center_north, center_east = get_point_along_route(ownRoute, freeParams["start_route_fraction"])
-    ax.add_patch(plt.Circle((center_east, center_north), freeParams["start_radius"], color="tab:red", fill=False, linestyle=":"))
-    ax.plot([], [], color="tab:red", linestyle=":", label=f'Adversary start area ({freeParams["start_radius"]} m)')
-    firstSeed = freeParams["start_seed"]
     arrowLength = 600
-    for startSeed in range(firstSeed, firstSeed + numberOfStarts):
-        north, east, yaw = sample_free_start(freeParams, startSeed, map_obj, ownRoute)
+    def draw_start(north, east, yaw):
         ax.scatter(east, north, color="tab:red", marker="o", s=30, zorder=5)
         ax.annotate("", xy=(east + arrowLength*np.sin(yaw), north + arrowLength*np.cos(yaw)), xytext=(east, north),
                     arrowprops={"arrowstyle": "->", "color": "tab:red"}, zorder=5)
+    if has_fixed_start(freeParams):
+        north, east, yaw = sample_free_start(freeParams, None, map_obj, ownRoute)
+        draw_start(north, east, yaw)
+        ax.scatter([], [], color="tab:red", marker="o", s=30, label=f'Adversary start, fixed (heading {freeParams["start"]["heading_deg"]} deg)')
+        return np.array([[north - arrowLength, east - arrowLength], [north + arrowLength, east + arrowLength]])  # For the zoom
+    center_north, center_east = get_start_area_center(freeParams, ownRoute)
+    ax.add_patch(plt.Circle((center_east, center_north), freeParams["start_radius"], color="tab:red", fill=False, linestyle=":"))
+    ax.plot([], [], color="tab:red", linestyle=":", label=f'Adversary start area ({freeParams["start_radius"]} m)')
+    firstSeed = freeParams["start_seed"]
+    for startSeed in range(firstSeed, firstSeed + numberOfStarts):
+        north, east, yaw = sample_free_start(freeParams, startSeed, map_obj, ownRoute)
+        draw_start(north, east, yaw)
         ax.annotate(str(startSeed), (east, north), textcoords="offset points", xytext=(-12, -12), color="tab:red", fontsize=8)
     if freeParams["randomise_start_each_episode"]:
         label = f'Adversary starts, start seeds {firstSeed} to {firstSeed + numberOfStarts - 1} (one per episode)'
@@ -42,9 +49,10 @@ def plot_scenario(parameterFile = "parameters_marast.json", zoomToRoutes = True,
     with open(REPO_ROOT / parameterFile) as f:
         params = json.load(f)
     if numberOfStarts is None:
-        randomised = params.get("free_adversary", {}).get("randomise_start_each_episode", False)
+        freeParams = params.get("free_adversary", {})
+        randomised = freeParams.get("randomise_start_each_episode", False) and not has_fixed_start(freeParams)
         numberOfStarts = 20 if randomised else 1
-    frame_gdf, _, land_gdf, _, _ = get_gdf_from_gpkg(get_map_path(MARAST_ROOT, params["map"]),
+    frame_gdf, _, land_gdf, _, _ = get_gdf_from_gpkg(get_map_file(params["map"]),
                                                      "frame_3857", "ocean_3857", "land_3857", "coast_3857", "water_3857")
     fig, ax = plt.subplots(figsize=(13, 7), layout="constrained")
     land_gdf.plot(ax=ax, color="#D8D2C4", zorder=0)
@@ -58,10 +66,11 @@ def plot_scenario(parameterFile = "parameters_marast.json", zoomToRoutes = True,
     if freeAdversary:  # The free adversary has no route
         shipStyles = shipStyles[:1]
     for name, key, color, lineStyle, labelOffset in shipStyles:
-        route = np.atleast_2d(np.loadtxt(get_ship_route_path(MARAST_ROOT, params[key])))  # Columns: north, east
+        route = load_route(params[key])  # Columns: north, east
         routes.append(route)
         north, east = route[:, 0], route[:, 1]
-        ax.plot(east, north, color=color, label=f'{name} route ({params[key]})', **lineStyle)
+        routeName = params[key] if isinstance(params[key], str) else "waypoints in the parameter file"
+        ax.plot(east, north, color=color, label=f'{name} route ({routeName})', **lineStyle)
         ax.scatter(east, north, color=color, marker=".", zorder=4)
         ax.scatter(east[0], north[0], color=color, marker="o", s=80, zorder=5)
         ax.scatter(east[-1], north[-1], color=color, marker="*", s=200, zorder=5)

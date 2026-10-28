@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from sim.marast.marastPath import MARAST_ROOT
+from sim.marast.marastPath import MARAST_ROOT, REPO_ROOT
 from sim.marast.adversaryShip import AdversaryShipModel
 from sim.marast.movingObject import MovingObjectModel
 
@@ -24,6 +24,22 @@ from utils.prepare_map import get_gdf_from_gpkg, get_polygon_from_gdf
 # external/MAR-AST/test_beds/ship_simu_test/test_double_ship_map.py
 
 
+def get_map_file(mapName):  # Our own maps/ folder first, then MAR-AST's data/map/
+    ownMap = REPO_ROOT / "maps" / mapName
+    return str(ownMap) if ownMap.is_file() else get_map_path(MARAST_ROOT, mapName)
+
+
+def load_route(route):
+    ''' Waypoints as an array with columns north, east. route is either waypoints written in
+        the parameter file ([[north, east], ...]), or a route file in our routes/ folder or
+        in MAR-AST's data/route/.
+    '''
+    if not isinstance(route, str):
+        return np.atleast_2d(np.array(route, dtype=float))
+    ownRoute = REPO_ROOT / "routes" / route
+    return np.atleast_2d(np.loadtxt(ownRoute if ownRoute.is_file() else get_ship_route_path(MARAST_ROOT, route)))
+
+
 def get_point_along_route(route, fraction):  # (north, east) at a fraction of the route's length
     legLengths = np.hypot(*np.diff(route, axis=0).T)
     distance = fraction*legLengths.sum()
@@ -34,21 +50,41 @@ def get_point_along_route(route, fraction):  # (north, east) at a fraction of th
     return route[-1]
 
 
+def has_fixed_start(freeParams):  # "start": {"north", "east", "heading_deg"} instead of "random" (the default)
+    return isinstance(freeParams.get("start", "random"), dict)
+
+
+def get_start_area_center(freeParams, ownRoute):  # start_center [north, east] if given, else a point along the own route
+    if "start_center" in freeParams:
+        return tuple(float(x) for x in freeParams["start_center"])
+    return tuple(get_point_along_route(ownRoute, freeParams["start_route_fraction"]))
+
+
+def is_on_open_water(map_obj, north, east, clearance):  # MAR-AST's checks use ship_length/2 as margin, so pass 2x the clearance
+    return not (check_condition.is_grounding(map_obj, [north, east], 2*clearance)
+                or check_condition.is_pos_outside_horizon(map_obj, [north, east], 2*clearance))
+
+
 def sample_free_start(freeParams, startSeed, map_obj, ownRoute):
-    ''' Random (north, east, yaw) for the free adversary, the same for the same startSeed.
-        Uniform within start_radius m of the point start_route_fraction along the own ship's
-        route, inside the map and at least land_clearance m from land. Uniform heading.
+    ''' (north, east, yaw) for the free adversary. With a fixed start, the start from the
+        parameter file (startSeed is not used). Otherwise random, the same for the same
+        startSeed: uniform within start_radius m of the start area center, inside the map
+        and at least land_clearance m from land, with a uniform heading.
     '''
+    if has_fixed_start(freeParams):
+        start = freeParams["start"]
+        north, east = float(start["north"]), float(start["east"])
+        if not is_on_open_water(map_obj, north, east, freeParams["land_clearance"]):
+            raise ValueError(f'The fixed adversary start ({north}, {east}) is on land, outside the map or closer than land_clearance to land')
+        return north, east, float(np.deg2rad(start["heading_deg"]))
     rng = np.random.default_rng(startSeed)
-    center_north, center_east = get_point_along_route(ownRoute, freeParams["start_route_fraction"])
+    center_north, center_east = get_start_area_center(freeParams, ownRoute)
     for _ in range(1000):
         distance = freeParams["start_radius"]*np.sqrt(rng.uniform())
         direction = rng.uniform(0, 2*np.pi)
         north = center_north + distance*np.cos(direction)
         east = center_east + distance*np.sin(direction)
-        clearance = 2*freeParams["land_clearance"]  # MAR-AST's checks use ship_length/2 as margin
-        if not (check_condition.is_grounding(map_obj, [north, east], clearance)
-                or check_condition.is_pos_outside_horizon(map_obj, [north, east], clearance)):
+        if is_on_open_water(map_obj, north, east, freeParams["land_clearance"]):
             return float(north), float(east), float(rng.uniform(-np.pi, np.pi))
     raise ValueError(f'No start on open water found for start seed {startSeed}. Lower land_clearance or move the start area')
 
@@ -67,7 +103,7 @@ def build_swimmers(params):
     swimmerParams = params.get("swimmers")
     if swimmerParams is None or swimmerParams["count"] == 0:
         return []
-    ownRoute = np.loadtxt(get_ship_route_path(MARAST_ROOT, params["own_route"]))
+    ownRoute = load_route(params["own_route"])
     center_north, center_east = get_point_along_route(ownRoute, swimmerParams["route_fraction"])
     return [MovingObjectModel(
                 center_north=center_north,
@@ -96,7 +132,7 @@ def build_two_ship_env(params):
     # np.random is used for the wave phases when a ship is created
     np.random.seed(params["env_seed"])
 
-    map_gdfs = get_gdf_from_gpkg(get_map_path(MARAST_ROOT, params["map"]),
+    map_gdfs = get_gdf_from_gpkg(get_map_file(params["map"]),
                                  "frame_3857", "ocean_3857", "land_3857", "coast_3857", "water_3857")
     frame_gdf, land_gdf = map_gdfs[0], map_gdfs[2]
     map = [PolygonObstacle(get_polygon_from_gdf(land_gdf)), frame_gdf]
@@ -189,8 +225,7 @@ def build_two_ship_env(params):
         specific_fuel_consumption_coefficients_dg=SpecificFuelConsumptionBaudouin6M26Dot3().fuel_consumption_coefficients()
     )
 
-    def build_asset(shipClass, name_tag, route_name, heading_gains):  # route_name: route file path, or an array of waypoints
-        route = np.loadtxt(route_name) if isinstance(route_name, str) else route_name  # Columns: north, east
+    def build_asset(shipClass, name_tag, route, heading_gains, colav_mode):  # route: array of waypoints, columns north, east
         (north_0, east_0), (north_1, east_1) = route[0], route[1]
         simulation_config = SimulationConfiguration(
             initial_north_position_m=north_0,
@@ -215,7 +250,7 @@ def build_two_ship_env(params):
             los_parameters=LosParameters(
                 radius_of_acceptance=300, lookahead_distance=1000, integral_gain=0.002, integrator_windup_limit=4000),
             name_tag=name_tag,
-            route_name=route_name,
+            route_name=route,
             engine_steps_per_time_step=params["engine_step_count"],
             initial_propeller_shaft_speed_rad_per_s=0,
             initial_propeller_shaft_acc_rad_per_sec2=0,
@@ -223,7 +258,7 @@ def build_two_ship_env(params):
             cross_track_error_tolerance=750,
             nav_fail_time=300,
             map_obj=map[0],
-            colav_mode='sbmpc',  # Own ship: SBMPC. Adversary: hook for the injected heading offset
+            colav_mode=colav_mode,
             print_status=False
         )
         return wrap_asset(ship)
@@ -241,16 +276,18 @@ def build_two_ship_env(params):
         )
         return ShipAsset(ship_model=model, info=info)
 
-    ownRouteName = get_ship_route_path(MARAST_ROOT, params["own_route"])
-    if params.get("adversary_mode", "route") == "free":  # No route: random start, steered directly by the solver
+    ownRoute = load_route(params["own_route"])
+    if params.get("adversary_mode", "route") == "free":  # No route: random or fixed start, steered directly by the solver
         freeParams = params["free_adversary"]
-        start = sample_free_start(freeParams, freeParams["start_seed"], map[0], np.loadtxt(ownRouteName))
+        start = sample_free_start(freeParams, freeParams["start_seed"], map[0], ownRoute)
         adversaryRoute = get_dummy_route(*start)
     else:
-        adversaryRoute = get_ship_route_path(MARAST_ROOT, params["adversary_route"])
+        adversaryRoute = load_route(params["adversary_route"])
+    ownColav = {"sbmpc": "sbmpc", "none": None}[params.get("own_colav", "sbmpc")]  # "none": the own ship never evades
     assets = [
-        build_asset(ShipModel, 'Own ship', ownRouteName, params["own_heading_gains"]),
-        build_asset(AdversaryShipModel, 'Adversary ship', adversaryRoute, params["adversary_heading_gains"]),
+        build_asset(ShipModel, 'Own ship', ownRoute, params["own_heading_gains"], ownColav),
+        # The adversary needs 'sbmpc' for the hook that injects the solver's heading offset, see adversaryShip.py
+        build_asset(AdversaryShipModel, 'Adversary ship', adversaryRoute, params["adversary_heading_gains"], 'sbmpc'),
     ]
     if params.get("adversary_mode", "route") == "free":
         assets[1].ship_model.steer_freely()

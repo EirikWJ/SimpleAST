@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from sim.marast.marastPath import REPO_ROOT
-from sim.marast.scenario import build_two_ship_env, get_point_along_route, sample_free_start
+from sim.marast.scenario import build_two_ship_env, get_start_area_center, has_fixed_start, sample_free_start
 
 from env_wrappers.multiship_env.env import AssetInfo
 
@@ -21,7 +21,8 @@ class MarAstSimInterface:
         The action seed steers the adversary ship, held for one action period:
         - adversary_mode "route": seed in [0,1] -> heading offset on its LOS heading
         - adversary_mode "free": no route. It starts at a random position and heading (from a
-          start seed), and seed in [0,1] -> turn of its commanded heading
+          start seed) or at a fixed start, and seed in [0,1] -> turn of its commanded heading
+        own_colav "none" turns the own ship's SBMPC off, so it follows its route without evading.
         Swimmers (any number) move on seeded random paths. The own ship's SBMPC avoids them.
         Only own ship vs adversary counts as a collision: a ship that hits a swimmer stops,
         which ends the episode without one.
@@ -40,6 +41,7 @@ class MarAstSimInterface:
         self.offsetSigma = math.radians(params["heading_offset_sigma_deg"])
         self.transition_model = params["transition_model"]
         self.collision_distance = params["collision_distance"]
+        self.interpolate_distance = params.get("interpolate_closest_distance", False)  # Closest distance also between sim steps
         self.collision_reward = params["collision_reward"]
         self.miss_distance_scale = params["miss_distance_scale"]
         self.pass_margin = params["pass_margin"]
@@ -51,11 +53,15 @@ class MarAstSimInterface:
             self.freeParams = params["free_adversary"]
             self.maxTurn = math.radians(self.freeParams["max_turn_deg"])
             self.turnSigma = math.radians(self.freeParams["turn_sigma_deg"])
-            self.randomise_start = self.freeParams["randomise_start_each_episode"]
+            self.fixedStart = has_fixed_start(self.freeParams)  # The same start from the parameter file every episode, no start seed
+            self.randomise_start = self.freeParams["randomise_start_each_episode"] and not self.fixedStart
             self.nextStartSeed = self.freeParams["start_seed"]
             navigate = self.ownShip.auto_pilot.navigate
             self.ownRoute = np.column_stack([navigate.north, navigate.east])
-            self.anchor = get_point_along_route(self.ownRoute, self.freeParams["start_route_fraction"])  # Center of the start area
+            if self.fixedStart:
+                self.anchor = (self.freeParams["start"]["north"], self.freeParams["start"]["east"])
+            else:
+                self.anchor = get_start_area_center(self.freeParams, self.ownRoute)
         else:
             navigate = self.adversary.auto_pilot.navigate
             self.anchor = (navigate.north[0], navigate.east[0])  # Start of the adversary's route
@@ -115,7 +121,9 @@ class MarAstSimInterface:
         self.terminal_reason = None
         self.env.reset(seed=self.params["env_seed"])
         if self.freeAdversary:
-            if startSeed is None:  # Same start every episode, or start_seed, start_seed+1, ... if randomised
+            if self.fixedStart:  # No start seed, so action traces are stored and replayed without one
+                startSeed = None
+            elif startSeed is None:  # Same start every episode, or start_seed, start_seed+1, ... if randomised
                 startSeed = self.nextStartSeed
                 if self.randomise_start:
                     self.nextStartSeed += 1
@@ -182,8 +190,10 @@ class MarAstSimInterface:
         ax.set_xlim(allPoints[:, 1].min() - margin, allPoints[:, 1].max() + margin)
         ax.set_ylim(allPoints[:, 0].min() - margin, allPoints[:, 0].max() + margin)
         ax.set_aspect("equal")
-        startText = f'Adversary start seed {self.startSeed}. ' if self.freeAdversary else ''
-        ax.set_title(f'Ship paths (o start, x end). {startText}Ended by: {self.terminal_reason}')
+        startText = ''
+        if self.freeAdversary:
+            startText = 'Fixed adversary start. ' if self.fixedStart else f'Adversary start seed {self.startSeed}. '
+        ax.set_title(f'Ship paths (o start, x end). {startText}\nEnded by: {self.terminal_reason}')
         ax.set_xlabel("East [m]")
         ax.set_ylabel("North [m]")
         ax.legend()
@@ -191,8 +201,9 @@ class MarAstSimInterface:
 
     def _check_endstate(self) -> bool:
         distance = self._get_current_distance()
-        if distance < self.closest_distance:
-            self.closest_distance = distance
+        closestThisStep = self._get_closest_distance_in_last_step() if self.interpolate_distance else distance
+        if closestThisStep < self.closest_distance:
+            self.closest_distance = closestThisStep
         self._update_swimmer_distances()
         collisionInfo = self.ownShip.stop_info["collision"]  # MAR-AST's own 50 m check, against every other asset
         ownColliders = collisionInfo[1] if isinstance(collisionInfo, list) else []  # False, or [True, names]
@@ -225,6 +236,17 @@ class MarAstSimInterface:
 
     def _get_current_distance(self) -> float:
         return math.hypot(self.ownShip.north - self.adversary.north, self.ownShip.east - self.adversary.east)
+
+    def _get_closest_distance_in_last_step(self) -> float:
+        # The ships can move ~45 m towards each other in one 5 s step, so they can pass closer than
+        # at either end of it. Assume both move in a straight line at constant speed during the step
+        own, adversary = self.positionTrace["own"][-2:], self.positionTrace["adversary"][-2:]
+        startNorth, startEast = own[0][0] - adversary[0][0], own[0][1] - adversary[0][1]  # Own ship relative to the adversary
+        changeNorth = own[-1][0] - adversary[-1][0] - startNorth
+        changeEast = own[-1][1] - adversary[-1][1] - startEast
+        changeSquared = changeNorth**2 + changeEast**2
+        fraction = 0.0 if changeSquared == 0 else min(1.0, max(0.0, -(startNorth*changeNorth + startEast*changeEast)/changeSquared))
+        return math.hypot(startNorth + fraction*changeNorth, startEast + fraction*changeEast)
 
     def _update_swimmer_distances(self) -> None:
         self.closest_swimmer_distances = [
