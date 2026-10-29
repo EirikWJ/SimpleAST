@@ -27,7 +27,7 @@
     "max_heading_offset_deg": 30,
     "transition_model": "gaussian",
     "heading_offset_sigma_deg": 15,
-    "_free_adversary": "start: \"random\", or a fixed {north, east, heading_deg} used every episode (heading 0 = north, 90 = east). Random: a position within start_radius m of start_center [north, east] (or of the point start_route_fraction along the own ship's route if start_center is left out), at least land_clearance m from land, and a random heading, all from the start seed. randomise_start_each_episode: every episode gets the next start seed (start_seed, start_seed+1, ...). Use it for SAC. MCTS needs a fixed start or randomise_start_each_episode false. Each action turns the heading by up to max_turn_deg, and p = exp(-turn^2/2 sigma^2), so going straight is the most likely",
+    "_free_adversary": "start: \"random\", or a fixed {north, east, heading_deg} used every episode (heading 0 = north, 90 = east). Random: a position within start_radius m of start_center [north, east] (or of the point start_route_fraction along the own ship's route if start_center is left out), at least land_clearance m from land, at least min_start_distance m from the own ship's start (closer starts can collide within an action or two, whatever the solver does), and a random heading, all from the start seed. randomise_start_each_episode: every episode gets the next start seed (start_seed, start_seed+1, ...). Use it for SAC. MCTS needs a fixed start or randomise_start_each_episode false. Each action turns the heading by up to max_turn_deg, and p = exp(-turn^2/2 sigma^2), so going straight is the most likely",
     "free_adversary": {
         "start": {
             "north": 9067864.615,
@@ -38,6 +38,7 @@
         "randomise_start_each_episode": true,
         "start_radius": 4000,
         "land_clearance": 200,
+        "min_start_distance": 2000,
         "max_turn_deg": 30,
         "turn_sigma_deg": 15,
         "start_route_fraction": 0.5

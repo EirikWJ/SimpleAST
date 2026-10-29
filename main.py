@@ -14,7 +14,7 @@ from sim.simInterface import SimInterface
 # Without arguments, main.py runs whatever is called at the bottom of this file.
 
 def main():  # MCTS on Brage's simulator
-    run(simulator="brage", solver="mcts", n=4000)
+    run(simulator="brage", solver="mcts", n=4000)       
 
 def mainMarast(numberOfLoops = 500, level = "L0"):  # MCTS on MAR-AST
     run(simulator="marast", solver="mcts", n=numberOfLoops, level=level)

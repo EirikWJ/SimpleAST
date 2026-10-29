@@ -65,17 +65,27 @@ def is_on_open_water(map_obj, north, east, clearance):  # MAR-AST's checks use s
                 or check_condition.is_pos_outside_horizon(map_obj, [north, east], 2*clearance))
 
 
+def is_far_from_own_ship(freeParams, ownRoute, north, east):
+    # min_start_distance [m] from the own ship's start (the first waypoint of its route). Closer
+    # starts can collide within an action or two, whatever the solver does. Missing: 0
+    return np.hypot(north - ownRoute[0][0], east - ownRoute[0][1]) >= freeParams.get("min_start_distance", 0)
+
+
 def sample_free_start(freeParams, startSeed, map_obj, ownRoute):
     ''' (north, east, yaw) for the free adversary. With a fixed start, the start from the
         parameter file (startSeed is not used). Otherwise random, the same for the same
-        startSeed: uniform within start_radius m of the start area center, inside the map
-        and at least land_clearance m from land, with a uniform heading.
+        startSeed: uniform within start_radius m of the start area center, inside the map,
+        at least land_clearance m from land and at least min_start_distance m from the own
+        ship's start, with a uniform heading. A start seed whose first draw already meets
+        these gives the same start as without the conditions.
     '''
     if has_fixed_start(freeParams):
         start = freeParams["start"]
         north, east = float(start["north"]), float(start["east"])
         if not is_on_open_water(map_obj, north, east, freeParams["land_clearance"]):
             raise ValueError(f'The fixed adversary start ({north}, {east}) is on land, outside the map or closer than land_clearance to land')
+        if not is_far_from_own_ship(freeParams, ownRoute, north, east):
+            raise ValueError(f'The fixed adversary start ({north}, {east}) is closer than min_start_distance to the own ship\'s start')
         return north, east, float(np.deg2rad(start["heading_deg"]))
     rng = np.random.default_rng(startSeed)
     center_north, center_east = get_start_area_center(freeParams, ownRoute)
@@ -84,9 +94,10 @@ def sample_free_start(freeParams, startSeed, map_obj, ownRoute):
         direction = rng.uniform(0, 2*np.pi)
         north = center_north + distance*np.cos(direction)
         east = center_east + distance*np.sin(direction)
-        if is_on_open_water(map_obj, north, east, freeParams["land_clearance"]):
+        if is_on_open_water(map_obj, north, east, freeParams["land_clearance"]) and is_far_from_own_ship(freeParams, ownRoute, north, east):
             return float(north), float(east), float(rng.uniform(-np.pi, np.pi))
-    raise ValueError(f'No start on open water found for start seed {startSeed}. Lower land_clearance or move the start area')
+    raise ValueError(f'No start found for start seed {startSeed} on open water and far enough from the own ship. '
+                     f'Lower land_clearance or min_start_distance, or move the start area')
 
 
 def get_dummy_route(north, east, yaw):  # Two waypoints, the second so far away that it is never reached

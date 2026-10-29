@@ -20,6 +20,7 @@ set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 
 export MPLBACKEND=Agg  # No display on the compute nodes: plots are only saved
+export PYTHONUNBUFFERED=1  # Print to the log right away, not in large blocks
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK  # PyTorch and numpy use at most the job's cores
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK

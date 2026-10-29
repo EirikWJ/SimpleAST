@@ -33,18 +33,19 @@ def run(simulator = "marast",       # "marast" or "brage" (the simple boat simul
         swimmer_seed = 42,
         own_colav = True,           # False: the own ship never evades (like Brage's straight boat)
         collision_distance = None,  # [m]. None: the level's value (50 m)
+        min_start_distance = None,  # [m] from the own ship's start to a random adversary start. None: the level's value (2000 m)
         solver_seed = 0,            # Seeds MCTS and random search (Python's random) and SAC (network and exploration)
         evaluate = None,            # SAC with random_start "each": unseen starts to test the trained policy on. None: 20
         show_plots = True,          # False: plots are only saved in the run's folder
         name = None):               # Folder name in results/runs/. None: <level>_<solver>_<date>_<time>
-    level = _check_options(simulator, solver, n, level, random_start, swimmers, own_colav, collision_distance, evaluate)
+    level = _check_options(simulator, solver, n, level, random_start, swimmers, own_colav, collision_distance, min_start_distance, evaluate)
     if evaluate is None:
         evaluate = 20 if solver == "sac" and random_start == "each" else 0
     settings = {"simulator": simulator, "solver": solver, "n": n, "level": level, "random_start": random_start,
                 "start_seed": start_seed, "swimmers": swimmers, "swimmer_seed": swimmer_seed, "own_colav": own_colav,
-                "collision_distance": collision_distance, "solver_seed": solver_seed, "evaluate": evaluate}
+                "collision_distance": collision_distance, "min_start_distance": min_start_distance, "solver_seed": solver_seed, "evaluate": evaluate}
     if simulator == "marast":
-        params = get_marast_params(level, random_start, start_seed, swimmers, swimmer_seed, own_colav, collision_distance)
+        params = get_marast_params(level, random_start, start_seed, swimmers, swimmer_seed, own_colav, collision_distance, min_start_distance)
     else:
         with open(REPO_ROOT / "parameters.json") as f:
             params = json.load(f)
@@ -111,7 +112,7 @@ def replay(trace = None, start_seed = None, name = None, show = True):
 
 
 def get_marast_params(level, random_start = False, start_seed = 0, swimmers = 0, swimmer_seed = 42,
-                      own_colav = True, collision_distance = None) -> dict:
+                      own_colav = True, collision_distance = None, min_start_distance = None) -> dict:
     ''' The level's parameter file, with the run options applied '''
     with open(REPO_ROOT / "levels" / f'{level}.json') as f:
         params = json.load(f)
@@ -125,6 +126,8 @@ def get_marast_params(level, random_start = False, start_seed = 0, swimmers = 0,
     params["own_colav"] = "sbmpc" if own_colav else "none"
     if collision_distance is not None:
         params["collision_distance"] = collision_distance
+    if min_start_distance is not None:
+        free["min_start_distance"] = min_start_distance
     return params
 
 
@@ -140,6 +143,7 @@ def main_cli(argv = None) -> None:  # Terminal interface for run() and replay(),
     parser.add_argument("--swimmer-seed", type=int, default=42)
     parser.add_argument("--no-colav", action="store_true", help="the own ship never evades")
     parser.add_argument("--collision-distance", type=float)
+    parser.add_argument("--min-start-distance", type=float, help="from the own ship's start to a random adversary start [m] (default the level's, 2000)")
     parser.add_argument("--solver-seed", type=int, default=0)
     parser.add_argument("--evaluate", type=int, help="SAC with --random-start each: unseen starts to test on (default 20)")
     parser.add_argument("--no-plots", action="store_true", help="only save the plots in the run's folder")
@@ -153,11 +157,11 @@ def main_cli(argv = None) -> None:  # Terminal interface for run() and replay(),
     run(simulator=args.sim, solver=args.solver, n=args.n, level=args.level,
         random_start=False if args.random_start == "off" else args.random_start, start_seed=args.start_seed,
         swimmers=args.swimmers, swimmer_seed=args.swimmer_seed, own_colav=not args.no_colav,
-        collision_distance=args.collision_distance, solver_seed=args.solver_seed, evaluate=args.evaluate,
+        collision_distance=args.collision_distance, min_start_distance=args.min_start_distance, solver_seed=args.solver_seed, evaluate=args.evaluate,
         show_plots=not args.no_plots, name=args.name)
 
 
-def _check_options(simulator, solver, n, level, random_start, swimmers, own_colav, collision_distance, evaluate) -> str:
+def _check_options(simulator, solver, n, level, random_start, swimmers, own_colav, collision_distance, min_start_distance, evaluate) -> str:
     # Returns the full level name. Raises ValueError for options that cannot work together
     if simulator not in ("marast", "brage"):
         raise ValueError(f'simulator must be "marast" or "brage", not {simulator!r}')
@@ -169,7 +173,8 @@ def _check_options(simulator, solver, n, level, random_start, swimmers, own_cola
         raise ValueError("n must be at least 1")
     if simulator == "brage":
         notInBrage = {"level": level is not None, "random_start": random_start is not False, "swimmers": swimmers > 0,
-                      "own_colav": not own_colav, "collision_distance": collision_distance is not None}
+                      "own_colav": not own_colav, "collision_distance": collision_distance is not None,
+                      "min_start_distance": min_start_distance is not None}
         used = [option for option, isUsed in notInBrage.items() if isUsed]
         if used:
             raise ValueError(f'Brage\'s simulator has no {", ".join(used)}. These options are only for MAR-AST')

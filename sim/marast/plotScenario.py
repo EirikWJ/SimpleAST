@@ -31,6 +31,10 @@ def plot_free_starts(ax, params, land_gdf, ownRoute, numberOfStarts):
     center_north, center_east = get_start_area_center(freeParams, ownRoute)
     ax.add_patch(plt.Circle((center_east, center_north), freeParams["start_radius"], color="tab:red", fill=False, linestyle=":"))
     ax.plot([], [], color="tab:red", linestyle=":", label=f'Adversary start area ({freeParams["start_radius"]} m)')
+    minDistance = freeParams.get("min_start_distance", 0)
+    if minDistance > 0:  # No random start this close to the own ship's start
+        ax.add_patch(plt.Circle((ownRoute[0][1], ownRoute[0][0]), minDistance, color="tab:blue", alpha=0.12, linewidth=0))
+        ax.scatter([], [], color="tab:blue", alpha=0.25, marker="s", label=f'No adversary start within {minDistance} m of the own ship')
     firstSeed = freeParams["start_seed"]
     for startSeed in range(firstSeed, firstSeed + numberOfStarts):
         north, east, yaw = sample_free_start(freeParams, startSeed, map_obj, ownRoute)
