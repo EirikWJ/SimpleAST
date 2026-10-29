@@ -2,6 +2,8 @@ import math, json, copy
 
 import matplotlib.pyplot as plt
 
+from plotOutput import finish_figure
+
 #TODO: Messy simulation. Should be cleaned up.
 #
 #   Function explenation
@@ -85,7 +87,7 @@ class SimpleBoatController:
         plt.ylabel("y")
         plt.ylim(-10, 110)
         plt.xlim(-10, 110)
-        plt.show()
+        finish_figure("ship_paths")
 
     def _next_state(self):
         self.steerable_pos[0] += math.sin(self.steerable_angle)*self.steplength

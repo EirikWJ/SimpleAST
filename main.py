@@ -1,45 +1,52 @@
-from sim.simInterface import SimInterface
-from sim.simpleBoatController import SimpleBoatController
-from mcts.mctsController import MCTSController
+import random, sys
+
 import matplotlib.pyplot as plt
 plt.rcParams["figure.figsize"] = (10,8)
-import random
 
-def main():
-    MCTS = MCTSController()
-    MCTS.loop(4000)
+from run import run, replay, main_cli
+from sim.simInterface import SimInterface
 
-def mainMarast(numberOfLoops = 500):  # Same search, but on MAR-AST's Ship in Transit simulator (parameters_marast.json)
-    from sim.marastInterface import MarAstSimInterface
-    MCTS = MCTSController(simFactory=MarAstSimInterface)
-    MCTS.loop(numberOfLoops)
+# Every run goes through run() in run.py. From the terminal, e.g.:
+#   uv run python main.py --solver sac --n 500 --level L1 --random-start each --swimmers 2
+#   uv run python main.py --sim brage --solver mcts --n 4000
+#   uv run python main.py --replay                     (best result of the latest run)
+#   uv run python main.py --help                       (all options)
+# Without arguments, main.py runs whatever is called at the bottom of this file.
 
-def mainSac(numberOfLoops = 2000):  # SAC (deep RL) solver instead of MCTS, on the simple boat simulator
-    from sac.sacController import SACController
-    SAC = SACController()
-    SAC.loop(numberOfLoops)
+def main():  # MCTS on Brage's simulator
+    run(simulator="brage", solver="mcts", n=4000)
 
-def mainSacMarast(numberOfLoops = 500):  # SAC solver on MAR-AST's Ship in Transit simulator
-    from sac.sacController import SACController
-    from sim.marastInterface import MarAstSimInterface
-    SAC = SACController(simFactory=MarAstSimInterface)
-    SAC.loop(numberOfLoops)
+def mainMarast(numberOfLoops = 500, level = "L0"):  # MCTS on MAR-AST
+    run(simulator="marast", solver="mcts", n=numberOfLoops, level=level)
 
-def randomPath(verbose = True):
+def mainSac(numberOfLoops = 2000):  # SAC (deep RL) solver instead of MCTS, on Brage's simulator
+    run(simulator="brage", solver="sac", n=numberOfLoops)
+
+def mainSacMarast(numberOfLoops = 500, level = "L0", random_start = "each"):  # SAC on MAR-AST, a new random start every episode
+    run(simulator="marast", solver="sac", n=numberOfLoops, level=level, random_start=random_start)
+
+def randomPath(verbose = True):  # One episode with random actions on Brage's simulator
     SBC = SimInterface()
     while not SBC.sim_in_endstate:
         SBC.step(random.random())
     if verbose:
         SBC.plot()
-    return SBC.collision_happened
+    return SBC.is_failure_episode()
 
-main()
+if len(sys.argv) > 1:
+    main_cli()
+else:
+    run()  # Defaults: MCTS, 500 iterations, MAR-AST level L0_open_water, fixed start
+
+# main()
 
 # mainMarast()
 
 # mainSac()
 
 # mainSacMarast()
+
+# replay()
 
 # randomPath()
 
@@ -48,4 +55,4 @@ main()
 #     if randomPath(False):
 #         hits+=1
 #     if (i+1)%10000 == 0:
-#         print(hits, "collisions in",i,"random routes")
+#         print(hits, "collisions in",i+1,"random routes")

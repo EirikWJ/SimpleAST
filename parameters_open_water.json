@@ -25,7 +25,7 @@
 
     "_free_adversary": "start: \"random\", or a fixed {north, east, heading_deg} used every episode (heading 0 = north, 90 = east). Random: a position within start_radius m of start_center [north, east] (or of the point start_route_fraction along the own ship's route if start_center is left out), at least land_clearance m from land, and a random heading, all from the start seed. randomise_start_each_episode: every episode gets the next start seed (start_seed, start_seed+1, ...). Use it for SAC. MCTS needs a fixed start or randomise_start_each_episode false. Each action turns the heading by up to max_turn_deg, and p = exp(-turn^2/2 sigma^2), so going straight is the most likely",
     "free_adversary": {
-        "start": {"north": 0, "east": 1700, "heading_deg": 0},
+        "start": {"north": 0, "east": 2500, "heading_deg": 0},
         "start_seed": 0,
         "randomise_start_each_episode": true,
         "start_center": [5000, 5000],
@@ -36,7 +36,7 @@
     },
 
     "_reward": "log(p) per action, then collision_reward or -miss_distance/miss_distance_scale at the end",
-    "collision_distance": 50,
+    "collision_distance": 500,
     "_interpolate_closest_distance": "true: the closest distance (and so the collision check and the reward) also counts how close the ships came between two sim steps, assuming straight lines within the step. false: only at the steps, as in the other parameter files",
     "interpolate_closest_distance": true,
     "collision_reward": 10,

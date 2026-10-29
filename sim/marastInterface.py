@@ -5,6 +5,8 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+from plotOutput import finish_figure
+
 from sim.marast.marastPath import REPO_ROOT
 from sim.marast.scenario import build_two_ship_env, get_start_area_center, has_fixed_start, sample_free_start
 
@@ -28,10 +30,11 @@ class MarAstSimInterface:
         which ends the episode without one.
     '''
 
-    def __init__(self, parameterFile = "parameters_marast.json") -> None:  # Initiates simulation at state zero
-        with open(REPO_ROOT / parameterFile) as f:
-            self.params = json.load(f)
-        params = self.params
+    def __init__(self, parameterFile = "parameters_marast.json", params = None) -> None:  # Initiates simulation at state zero
+        if params is None:  # params: the parameters as a dict, instead of reading parameterFile
+            with open(REPO_ROOT / parameterFile) as f:
+                params = json.load(f)
+        self.params = params
         self.env, self.assets, self.map_gdfs = build_two_ship_env(params)
         self.ownShip = self.assets[0].ship_model
         self.adversary = self.assets[1].ship_model
@@ -197,7 +200,7 @@ class MarAstSimInterface:
         ax.set_xlabel("East [m]")
         ax.set_ylabel("North [m]")
         ax.legend()
-        plt.show()
+        finish_figure("ship_paths")
 
     def _check_endstate(self) -> bool:
         distance = self._get_current_distance()

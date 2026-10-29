@@ -1,0 +1,80 @@
+{
+    "_scenario": "L0: Brage's simple world on MAR-AST, scaled by 100 m per unit: 10 x 10 km of open water with no obstacles. The own ship starts at Brage's [0, 50] and goes straight east across. The fixed adversary start is Brage's [17, 0] heading north. Leaving the square ends the episode (grounding). Run options (solver, random start, swimmers, ...) are set in run.py, this file holds the rest",
+    "own_route": [
+        [
+            5000,
+            0
+        ],
+        [
+            5000,
+            10000
+        ]
+    ],
+    "map": "open_water_10km.gpkg",
+    "time_step": 5,
+    "engine_step_count": 10,
+    "max_sim_time": 6000,
+    "desired_speed": 4.5,
+    "initial_forward_speed": 4.5,
+    "_own_route": "Waypoints [north, east] written here, or a route file name in routes/ or MAR-AST's data/route/",
+    "_own_colav": "\"sbmpc\": the own ship evades with SBMPC. \"none\": it follows its route without evading, like Brage's straight boat",
+    "own_colav": "sbmpc",
+    "_heading_gains": "Boe (master-thesis repo, test_beds/ast_test/setup.py): own kd=66 ki=0.005, passive ship kd=75 ki=0.005. Weakly damped baseline is kd=0 ki=0",
+    "own_heading_gains": {
+        "kp": 1.5,
+        "kd": 66,
+        "ki": 0.005
+    },
+    "adversary_heading_gains": {
+        "kp": 1.5,
+        "kd": 75,
+        "ki": 0.005
+    },
+    "_adversary_mode": "\"route\": the adversary follows adversary_route, and the action is a heading offset from it (max_heading_offset_deg, heading_offset_sigma_deg). \"free\": adversary_route is not used, see free_adversary",
+    "adversary_mode": "free",
+    "action_period": 120,
+    "max_heading_offset_deg": 30,
+    "transition_model": "gaussian",
+    "heading_offset_sigma_deg": 15,
+    "_free_adversary": "start: \"random\", or a fixed {north, east, heading_deg} used every episode (heading 0 = north, 90 = east). Random: a position within start_radius m of start_center [north, east] (or of the point start_route_fraction along the own ship's route if start_center is left out), at least land_clearance m from land, and a random heading, all from the start seed. randomise_start_each_episode: every episode gets the next start seed (start_seed, start_seed+1, ...). Use it for SAC. MCTS needs a fixed start or randomise_start_each_episode false. Each action turns the heading by up to max_turn_deg, and p = exp(-turn^2/2 sigma^2), so going straight is the most likely",
+    "free_adversary": {
+        "start": {
+            "north": 0,
+            "east": 1700,
+            "heading_deg": 0
+        },
+        "start_seed": 0,
+        "randomise_start_each_episode": true,
+        "start_center": [
+            5000,
+            5000
+        ],
+        "start_radius": 5000,
+        "land_clearance": 100,
+        "max_turn_deg": 30,
+        "turn_sigma_deg": 15
+    },
+    "_reward": "log(p) per action, then collision_reward or -miss_distance/miss_distance_scale at the end",
+    "collision_distance": 50,
+    "_interpolate_closest_distance": "true: the closest distance (and so the collision check and the reward) also counts how close the ships came between two sim steps, assuming straight lines within the step. false: only at the steps, as in the other parameter files",
+    "interpolate_closest_distance": true,
+    "collision_reward": 10,
+    "miss_distance_scale": 100,
+    "pass_margin": 1000,
+    "_swimmers": "count swimmers on random paths, swimmer i with seed first_seed + i. A path only depends on its seed: the same seed always gives the same path, and it does not react to the ships or the solver. They start within start_radius m of the point route_fraction along the own ship's route. The own ship's SBMPC avoids them. A ship within 50 m of a swimmer stops (MAR-AST's collision check), which ends the episode without a found collision. count 0 turns them off",
+    "swimmers": {
+        "count": 0,
+        "first_seed": 42,
+        "route_fraction": 0.5,
+        "start_radius": 500,
+        "speed": 1.0,
+        "heading_change_sigma_deg": 10,
+        "length": 2,
+        "width": 1
+    },
+    "_environment": "Wave, wind and current are off so that an action trace always replays to the same outcome",
+    "include_wave": false,
+    "include_wind": false,
+    "include_current": false,
+    "env_seed": 0
+}

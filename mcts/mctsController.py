@@ -1,6 +1,7 @@
 import random, math, json
 
 from datetime import datetime, time
+from pathlib import Path
 from typing import Dict, List
 from typing_extensions import runtime
 from IPython.core.pylabtools import figsize
@@ -10,13 +11,15 @@ import numpy as np
 import seaborn as sn
 
 from mcts.treeNode import TreeNode
+from plotOutput import finish_figure
 from sim.simInterface import SimInterface
 from sim.simpleBoatController import SimpleBoatController
 
 class MCTSController:
 
-    def __init__(self, steerable_start = None, simFactory = None) -> None:  # Currently using this one
+    def __init__(self, steerable_start = None, simFactory = None, resultsDir = None) -> None:  # Currently using this one
         self.steerable_start = steerable_start
+        self.resultsDir = resultsDir  # Folder for crashStates.json. None: the working directory
         if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
             simFactory = lambda: SimInterface(steerable_start)
         self.simFactory = simFactory
@@ -48,7 +51,9 @@ class MCTSController:
                 print(f'Score {round(G, 2)} found at iteration {i}')
             Gs.append(G)
             runTime = datetime.now() - timeStart
-        with open('crashStates.json', 'w') as f:
+        self.Gs = Gs
+        crashStatesPath = 'crashStates.json' if self.resultsDir is None else Path(self.resultsDir) / 'crashStates.json'
+        with open(crashStatesPath, 'w') as f:
             json.dump(self.crashStates, f, ensure_ascii=False, indent=4)
         self.stats(Gs, runTime)
         return self.bestState, self.bestReward
@@ -151,7 +156,7 @@ class MCTSController:
         plt.title("Children per node in the search tree")
         plt.xlabel("Number of children")
         plt.ylabel("Number of nodes")
-        plt.show()
+        finish_figure("tree_children")
         index = range(len(Gs))
         plt.plot(index, Gs, label = "Total reward of iteration")
         plt.axhline(self.bestReward, color = "gray", linestyle = "--", label = f'Best reward ({round(self.bestReward, 2)})')
@@ -159,4 +164,4 @@ class MCTSController:
         plt.xlabel("Iteration")
         plt.ylabel("Total reward")
         plt.legend()
-        plt.show()
+        finish_figure("reward_over_iterations")

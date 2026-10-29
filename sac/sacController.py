@@ -6,6 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from plotOutput import finish_figure
+
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import StopTrainingOnMaxEpisodes
 
@@ -16,7 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class SACController:
 
-    def __init__(self, simFactory = None, parameterFile = "parameters_sac.json") -> None:
+    def __init__(self, simFactory = None, parameterFile = "parameters_sac.json", seed = None, resultsDir = None) -> None:
+        # seed: overrides the seed in parameterFile. resultsDir: folder for the crash states and the
+        # model. None: crashStatesSac.json in the working directory and model_path from parameterFile
         if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
             simFactory = SimInterface
         self.simFactory = simFactory
@@ -33,6 +37,11 @@ class SACController:
         with open(REPO_ROOT / parameterFile) as f:
             self.params = json.load(f)
         params = self.params
+        if seed is not None:
+            params["seed"] = seed
+        self.resultsDir = None if resultsDir is None else Path(resultsDir)
+        if self.resultsDir is not None:
+            params["model_path"] = self.resultsDir / "sacModel"
         self.env = AstEnv(self.simInterface, self._record_episode)
         self.model = SAC("MlpPolicy", self.env,
                          learning_rate=params["learning_rate"],
@@ -50,7 +59,8 @@ class SACController:
         timeStart = datetime.now()
         self.model.learn(total_timesteps=10**9, callback=StopTrainingOnMaxEpisodes(numberOfLoops))
         runTime = datetime.now() - timeStart
-        with open('crashStatesSac.json', 'w') as f:
+        crashStatesPath = 'crashStatesSac.json' if self.resultsDir is None else self.resultsDir / 'crashStates.json'
+        with open(crashStatesPath, 'w') as f:
             json.dump(self.crashStates, f, ensure_ascii=False, indent=4)
         if self.params["model_path"] is not None:
             modelPath = REPO_ROOT / self.params["model_path"]
@@ -141,4 +151,4 @@ class SACController:
         plt.xlabel("Episode")
         plt.ylabel("Total reward")
         plt.legend()
-        plt.show()
+        finish_figure("reward_over_episodes")
