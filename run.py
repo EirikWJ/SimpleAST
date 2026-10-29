@@ -1,4 +1,4 @@
-import argparse, json, random, statistics
+import argparse, json, os, random, statistics
 
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +49,7 @@ def run(simulator = "marast",       # "marast" or "brage" (the simple boat simul
         with open(REPO_ROOT / "parameters.json") as f:
             params = json.load(f)
     if name is None:
-        name = f'{level if simulator == "marast" else "brage"}_{solver}_{datetime.now():%Y-%m-%d_%H-%M-%S}'
+        name = _get_default_name(simulator, solver, level, solver_seed)
     resultsDir = RUNS_DIR / name
     resultsDir.mkdir(parents=True, exist_ok=True)
     with open(resultsDir / "settings.json", "w") as f:
@@ -191,6 +191,17 @@ def _get_level_name(level) -> str:  # "L1" -> "L1_stangvik_local". None -> L0
         if level in (name, name.split("_")[0]):
             return name
     raise ValueError(f'Unknown level {level!r}. Choose one of {LEVELS} (or just L0, L1, L2)')
+
+
+def _get_default_name(simulator, solver, level, solver_seed) -> str:
+    # <level>_<solver>_<date>_<time>. In a Slurm job array (e.g. on IDUN) the tasks start at the same
+    # time, so there it is <level>_<solver>_seed<solver seed>_job<array job id> instead, which also
+    # keeps the runs of one array together
+    base = f'{level if simulator == "marast" else "brage"}_{solver}'
+    arrayJob = os.environ.get("SLURM_ARRAY_JOB_ID")
+    if arrayJob is not None:
+        return f'{base}_seed{solver_seed}_job{arrayJob}'
+    return f'{base}_{datetime.now():%Y-%m-%d_%H-%M-%S}'
 
 
 def _get_sim_factory(simulator, params):
