@@ -18,9 +18,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class SACController:
 
-    def __init__(self, simFactory = None, parameterFile = "parameters_sac.json", seed = None, resultsDir = None) -> None:
+    def __init__(self, simFactory = None, parameterFile = "parameters_sac.json", seed = None, resultsDir = None, onEpisodeEnd = None) -> None:
         # seed: overrides the seed in parameterFile. resultsDir: folder for the crash states and the
-        # model. None: crashStatesSac.json in the working directory and model_path from parameterFile
+        # model. None: crashStatesSac.json in the working directory and model_path from parameterFile.
+        # onEpisodeEnd: called with (sim, G) after every training episode, while the sim still holds it
+        self.onEpisodeEnd = onEpisodeEnd
         if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
             simFactory = SimInterface
         self.simFactory = simFactory
@@ -99,6 +101,8 @@ class SACController:
         i = len(self.Gs)
         if (i%1000 == 0):
             print(i)
+        if self.onEpisodeEnd is not None:
+            self.onEpisodeEnd(self.simInterface, G)
         self.endStates.append(state)
         if e:
             self.crashStates.append(tuple(state) if startSeed is None else (startSeed, tuple(state)))

@@ -14,7 +14,8 @@ class RandomSearchController:
         Same interface as MCTSController and SACController: loop(n) runs n episodes.
     '''
 
-    def __init__(self, simFactory = None, seed = 0, resultsDir = None) -> None:
+    def __init__(self, simFactory = None, seed = 0, resultsDir = None, onEpisodeEnd = None) -> None:
+        self.onEpisodeEnd = onEpisodeEnd  # Called with (sim, G) after every episode, while the sim still holds it
         if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
             simFactory = SimInterface
         self.simFactory = simFactory
@@ -39,6 +40,8 @@ class RandomSearchController:
             while not terminal:  # SimInterface does not clear its end state on reset, so step before checking
                 G += sim.step(self.rng.random())
                 terminal = sim.is_terminal()
+            if self.onEpisodeEnd is not None:
+                self.onEpisodeEnd(sim, G)
             state = list(sim.get_state())
             startSeed = getattr(sim, "startSeed", None)  # Only set when the start varies, e.g. the free adversary
             if sim.is_failure_episode():

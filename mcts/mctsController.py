@@ -17,9 +17,10 @@ from sim.simpleBoatController import SimpleBoatController
 
 class MCTSController:
 
-    def __init__(self, steerable_start = None, simFactory = None, resultsDir = None) -> None:  # Currently using this one
+    def __init__(self, steerable_start = None, simFactory = None, resultsDir = None, onEpisodeEnd = None) -> None:  # Currently using this one
         self.steerable_start = steerable_start
         self.resultsDir = resultsDir  # Folder for crashStates.json. None: the working directory
+        self.onEpisodeEnd = onEpisodeEnd  # Called with (sim, G) after every iteration, while the sim still holds its episode
         if simFactory is None:  # simFactory creates the sim interface to search in, e.g. MarAstSimInterface
             simFactory = lambda: SimInterface(steerable_start)
         self.simFactory = simFactory
@@ -45,6 +46,8 @@ class MCTSController:
                 print(i)
             self.simIntefrace.reset_sim()
             G = self.simulate()
+            if self.onEpisodeEnd is not None:
+                self.onEpisodeEnd(self.simIntefrace, G)
             if G > self.bestReward:
                 self.bestState = self.simIntefrace.get_state()
                 self.bestReward = G

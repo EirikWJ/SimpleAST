@@ -1,9 +1,10 @@
-import argparse, json, random
+import argparse, json, random, statistics
 
 from datetime import datetime
 from pathlib import Path
 
 import plotOutput
+from runLog import RunLog, get_outcome
 
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_DIR = REPO_ROOT / "results" / "runs"
@@ -18,8 +19,8 @@ RANDOM_STARTS = (False, "once", "each")
 # or from the terminal (see main.py):
 #   uv run python main.py --solver sac --n 500 --level L1 --random-start each --swimmers 2
 #   uv run python main.py --replay
-# Each run gets its own folder results/runs/<name>/ with its settings, best result, crash
-# states, plots and (for SAC) the trained model.
+# Each run gets its own folder results/runs/<name>/ with settings.json, episodes.csv (one row
+# per training episode), summary.json, the crash states, the plots and (for SAC) the trained model.
 
 def run(simulator = "marast",       # "marast" or "brage" (the simple boat simulator)
         solver = "mcts",            # "mcts", "sac" or "random" (baseline: random actions)
@@ -55,26 +56,32 @@ def run(simulator = "marast",       # "marast" or "brage" (the simple boat simul
         json.dump({"run": settings, "params": params}, f, indent=4)
     plotOutput.configure(resultsDir, show_plots)
     simFactory = _get_sim_factory(simulator, params)
+    log = RunLog(resultsDir, n)  # episodes.csv, and summary.json as soon as training is done
 
     print(f'Run {name}: {solver} on {level if simulator == "marast" else "Brage simulator"}, n = {n}')
-    timeStart = datetime.now()
     if solver == "mcts":
         from mcts.mctsController import MCTSController
         random.seed(solver_seed)
-        controller = MCTSController(simFactory=simFactory, resultsDir=resultsDir)
+        controller = MCTSController(simFactory=simFactory, resultsDir=resultsDir, onEpisodeEnd=log.record)
     elif solver == "sac":
         from sac.sacController import SACController
-        controller = SACController(simFactory=simFactory, seed=solver_seed, resultsDir=resultsDir)
+        controller = SACController(simFactory=simFactory, seed=solver_seed, resultsDir=resultsDir, onEpisodeEnd=log.record)
     else:
         from randomsearch.randomSearchController import RandomSearchController
-        controller = RandomSearchController(simFactory=simFactory, seed=solver_seed, resultsDir=resultsDir)
-    controller.loop(n)
-    runTime = datetime.now() - timeStart
-    evaluation = controller.evaluate(evaluate) if evaluate > 0 else None
-
-    summary = _summarise(controller, simFactory, simulator, n, runTime, evaluation)
-    with open(resultsDir / "summary.json", "w") as f:
-        json.dump(summary, f, indent=4)
+        controller = RandomSearchController(simFactory=simFactory, seed=solver_seed, resultsDir=resultsDir, onEpisodeEnd=log.record)
+    try:
+        controller.loop(n)  # Also shows the solver's plots
+        if solver == "sac":
+            log.extra["trained_policy"] = _get_policy_summary(controller, simFactory)
+        if evaluate > 0:
+            log.write_summary("evaluating")
+            log.extra["evaluation"] = _get_evaluation_summary(controller.evaluate(evaluate))
+    except KeyboardInterrupt:  # Ctrl+C: keep what the run found so far
+        log.write_summary("interrupted")
+        print(f'\nInterrupted. Results so far are in {resultsDir}')
+        plotOutput.configure()
+        raise
+    summary = log.write_summary("finished")
     _print_summary(name, summary, simulator)
     plotOutput.configure()
     return summary
@@ -96,7 +103,7 @@ def replay(trace = None, start_seed = None, name = None, show = True):
         start_seed = best["start_seed"] if start_seed is None else start_seed
     sim = _get_sim_factory(saved["run"]["simulator"], saved["params"])()
     _set_state(sim, trace, start_seed)
-    outcome = _get_outcome(sim)
+    outcome = get_outcome(sim)
     print(f'Replay of {runDir.name}{"" if start_seed is None else f", start seed {start_seed}"}: {outcome}')
     plotOutput.configure(None, show)
     sim.plot()
@@ -201,31 +208,23 @@ def _set_state(sim, trace, startSeed) -> None:  # SimInterface has no start seed
         sim.set_state(trace, startSeed)
 
 
-def _get_outcome(sim) -> dict:  # The episode the sim holds now
-    closest = sim.closest_distance if hasattr(sim, "closest_distance") else sim.simWorld.closest_boat_distance
-    return {"collision": bool(sim.is_failure_episode()), "closest_distance": round(float(closest), 3),
-            "terminal_reason": getattr(sim, "terminal_reason", "collision" if sim.is_failure_episode() else "straight boat left the world")}
-
-
-def _summarise(controller, simFactory, simulator, n, runTime, evaluation) -> dict:
-    bestStartSeed = getattr(controller, "bestStartSeed", None)
-    bestTrace = [float(seed) for seed in controller.bestState]
+def _get_policy_summary(controller, simFactory) -> dict:  # SAC's trained policy, run once without exploration after training
+    trace = [float(seed) for seed in controller.policyState]
     sim = simFactory()
-    _set_state(sim, bestTrace, bestStartSeed)  # Replays the best trace, to get its closest distance
-    summary = {
-        "runtime_seconds": round(runTime.total_seconds(), 1),
-        "episodes": n,
-        "collision_episodes": len(controller.crashStates),
-        "unique_collision_traces": len(set(controller.crashStates)),
-        "best": {"reward": round(float(controller.bestReward), 3), "start_seed": bestStartSeed, **_get_outcome(sim), "trace": bestTrace},
-    }
-    if evaluation is not None:
-        summary["evaluation"] = {
-            "collisions": sum(collided for _, collided, _, _ in evaluation),
-            "starts": len(evaluation),
-            "results": [{"start_seed": startSeed, "collision": bool(collided), "reward": round(float(G), 3), "closest_distance": round(float(d), 1)}
-                        for startSeed, collided, G, d in evaluation]}
-    return summary
+    _set_state(sim, trace, controller.policyStartSeed)
+    return {"start_seed": controller.policyStartSeed, "reward": round(float(controller.policyReward), 4), **get_outcome(sim),
+            "actions": len(trace), "trace": trace}
+
+
+def _get_evaluation_summary(evaluation) -> dict:  # From SACController.evaluate(): (start seed, collision, reward, closest distance) per start
+    return {
+        "starts": len(evaluation),
+        "start_seeds": f'{evaluation[0][0]} to {evaluation[-1][0]}',
+        "collisions": sum(bool(collided) for _, collided, _, _ in evaluation),
+        "median_reward": round(statistics.median(float(G) for _, _, G, _ in evaluation), 3),
+        "median_closest_distance": round(statistics.median(float(d) for _, _, _, d in evaluation), 1),
+        "results": [{"start_seed": startSeed, "collision": bool(collided), "reward": round(float(G), 3), "closest_distance": round(float(d), 1)}
+                    for startSeed, collided, G, d in evaluation]}
 
 
 def _print_summary(name, summary, simulator) -> None:
@@ -235,13 +234,24 @@ def _print_summary(name, summary, simulator) -> None:
     print(f'{"Run":<25} | {name}')
     print(f'{"Runtime":<25} | {summary["runtime_seconds"]} s ({round(summary["runtime_seconds"]/summary["episodes"], 2)} s per episode)')
     print(f'{"Episodes with collision":<25} | {summary["collision_episodes"]} of {summary["episodes"]} ({summary["unique_collision_traces"]} unique)')
-    print(f'{"Best reward":<25} | {best["reward"]}')
-    print(f'{"Best closest distance":<25} | {best["closest_distance"]} {unit} ({best["terminal_reason"]})')
-    if best["start_seed"] is not None:
-        print(f'{"Best start seed":<25} | {best["start_seed"]}')
+    startText = lambda episode: "" if episode["start_seed"] is None else f', start seed {episode["start_seed"]}'
+    first = summary["first_collision"]
+    firstText = "none" if first is None else f'episode {first["episode"]}, after {first["seconds_into_run"]} s'
+    print(f'{"First collision":<25} | {firstText}')
+    print(f'{"Best reward":<25} | {best["reward"]} (closest {best["closest_distance"]} {unit}, {best["terminal_reason"]}{startText(best)})')
+    likely = summary["most_likely_collision"]
+    if likely is not None:
+        print(f'{"Most likely collision":<25} | episode {likely["episode"]}, log-likelihood {likely["log_likelihood"]}{startText(likely)}')
+    progress = summary["progress"]
+    print(f'{"Mean reward first 10 %":<25} | {progress["first_10_percent"]["mean_reward"]}, last 10 %: {progress["last_10_percent"]["mean_reward"]}')
+    print(f'{"Episodes ended by":<25} | {summary["terminal_reasons"]}')
+    if "trained_policy" in summary:
+        policy = summary["trained_policy"]
+        print(f'{"Trained policy":<25} | reward {policy["reward"]}, closest {policy["closest_distance"]} {unit} ({policy["terminal_reason"]})')
     if "evaluation" in summary:
         evaluation = summary["evaluation"]
-        print(f'{"Evaluation":<25} | {evaluation["collisions"]} collisions on {evaluation["starts"]} unseen starts')
+        print(f'{"Evaluation":<25} | {evaluation["collisions"]} collisions on {evaluation["starts"]} unseen starts, '
+              f'median closest {evaluation["median_closest_distance"]} {unit}')
     print(f'{"Results":<25} | {RUNS_DIR / name}')
     print("="*35)
 
